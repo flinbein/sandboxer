@@ -1,0 +1,11 @@
+{
+	"onerror": "log",
+	"resources": {
+		"./fork.mjs": {
+			"integrity": true,
+			"dependencies": {
+				"node:vm": true
+			}
+		}
+	}
+}

@@ -1,0 +1,11 @@
+{
+  "name": "sandboxer",
+  "description": "manage modules in sandbox",
+  "type": "module",
+  "version": "1.0.0",
+  "node": ">=20.0.0",
+  "module": "index.mjs",
+  "repository": "https://github.com/flinbein/sandboxer.git",
+  "author": "dpohvar@gmail.com",
+  "license": "MIT"
+}
