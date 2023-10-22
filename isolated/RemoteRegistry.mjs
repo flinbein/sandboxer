@@ -118,13 +118,14 @@ export default class RemoteRegistry {
         let id = this.#hookIdMap.get(promise);
         if (id != null) return {type: "promise", status:"pending", value: id};
 
-        /** @type {{type: "promise", value?: any, status: "fulfilled"|"rejected"|"pending"}} */
-        const data = {type: "promise", status:"pending"};
+        /** @type {{type: "promise", value?: any, status?: "fulfilled"|"rejected"|"pending"}} */
+        const data = {type: "promise"};
         const weakResult = new WeakRef(data);
 
         const resolve = (status) => (value) => {
             const res = weakResult.deref();
             if (!res) return;
+            if (value in res) return; // late
             res.status = status;
             res.value = value;
 
@@ -134,8 +135,10 @@ export default class RemoteRegistry {
 
 
         context.onBeforeSend(() => {
+            if (data.status) return;
             id = this.#getNextHookId();
             data.value = id;
+            data.status = "pending";
             this.#hookIdMap.set(promise, id);
         })
         const onPromiseDone = (status) => (value) => {
@@ -144,6 +147,7 @@ export default class RemoteRegistry {
         }
 
         context.onSuccess(() => {
+            if (data.status !== "pending") return;
             promise.then(onPromiseDone("fulfilled"), onPromiseDone("rejected"));
         })
         context.onError(() => {
@@ -364,7 +368,9 @@ export default class RemoteRegistry {
     #hookRefMap = new Map()
     /** @type {WeakMap<Promise, {resolve: (x)=>void, reject: (x)=>void}>} */
     #promiseResolversWeakMap = new WeakMap()
-    #decodePromise({value}){
+    #decodePromise({value, status}){
+        if (status === "fulfilled") return Promise.resolve(value);
+        if (status === "rejected") return Promise.reject(value);
         const promiseRef = this.#hookRefMap.get(value);
         let promise = promiseRef?.deref();
         if (promise) return promise;
