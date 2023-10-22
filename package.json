@@ -7,5 +7,9 @@
   "module": "index.mjs",
   "repository": "https://github.com/flinbein/sandboxer.git",
   "author": "dpohvar@gmail.com",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.8.4",
+    "typescript": "^5.2.2"
+  }
 }

@@ -1,15 +1,18 @@
-import createModules from "./index.mjs"
+import ModuleSandbox from "./index.mjs"
 
-const modules = await createModules({
+const sandbox = await ModuleSandbox.create({
     room: {
         source: `
             import { getUsers } from "main";
+            function* listGenerator(limit) {
+                let x = 0;
+                while (x <= limit) yield x++;
+                return 0;
+            }
             export const getNthUser = (index) => getUsers()[index];
             export function handleMessage(message){
                 console.log("Message from", this.name, message);
-                let r = 12n;
-                for (let i=0n; i<99999999n; i++) {r += 1n}
-                return ["Message-handled", r];
+                return listGenerator;
             }
         `,
         links: ['main']
@@ -21,16 +24,21 @@ const modules = await createModules({
     }
 });
 
-
 try {
     console.log("====== START RESPONSE");
-    const response = await modules.room.handleMessage.call({name: "DPOHVAR"}, "Hello");
-    console.log("====== END RESPONSE", response);
+    // todo: invoke other way
+    const listGenerator = await sandbox.invoke("room","handleMessage",{name: "DPOHVAR"}, ["Hello"], 1000);
+    const array = await arrayFromAsync(await listGenerator(5));
+    console.log("====== call listGenerator DONE", array);
 } catch (e) {
     console.log("====== ERROR RESPONSE", e);
 }
 
+async function arrayFromAsync(asyncIterator){
+    const arr=[];
+    for await(const i of asyncIterator) arr.push(i);
+    return arr;
+}
+
 await new Promise(r => setTimeout(r, 3000));
 console.log("Main process done!");
-
-

@@ -1,0 +1,16 @@
+{
+	"onerror": "throw",
+	"resources": {
+		"./fork.mjs": {
+			"integrity": true,
+			"dependencies": {
+				"node:vm": true,
+				"./RemoteRegistry.mjs": true
+			}
+		},
+		"./RemoteRegistry.mjs": {
+			"integrity": true,
+			"dependencies": {}
+		}
+	}
+}

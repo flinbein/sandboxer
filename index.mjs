@@ -1,92 +1,127 @@
 import { fork }  from 'node:child_process';
-import {fileURLToPath} from 'url';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+import EventEmitter from "node:events";
+import RemoteRegistry from "./isolated/RemoteRegistry.mjs";
 
 const dir = fileURLToPath(new URL('.', import.meta.url));
 
 const baseConfig = {
-    maxYoungGenerationSizeMb: 10,
-    maxOldGenerationSizeMb: 10,
-    codeRangeSizeMb: 10,
-    stackSizeMb: 4,
-    checkAlivePeriod: 1000,
-    checkAliveTimeout: 200,
-    maxCpuUsageUser: 50000,
-    maxCpuUsageSystem: 40000,
-}
-export default async function createModules(moduleDescriptions, config = {}){
-    const conf = {...config, ...baseConfig};
-    const key = crypto.getRandomValues(Buffer.alloc(32)).toString('hex');
-    const execArgv = [
-        `--experimental-permission`, `--allow-fs-read=${dir}fork.mjs,${dir}policy.json`,
-        `--experimental-policy=${dir}policy.json`,
+    maxYoungGenerationSizeMb: 100,
+    execArgv: [
         `--experimental-vm-modules`,
-        `--experimental-shadow-realm`,
         `--disallow-code-generation-from-strings`,
         `--disable-proto=delete`,
-        `--experimental-wasm-modules`,
-        `--max-semi-space-size=${conf.maxOldGenerationSizeMb}`,
-        `--max-old-space-size=${conf.maxYoungGenerationSizeMb}`
-    ];
+        `--no-experimental-fetch`,
+        // `--no-warnings`,
+        `--experimental-wasm-modules`
+    ],
+    serialization: "advanced",
+    maxOldGenerationSizeMb: 100,
+    codeRangeSizeMb: 100,
+    stackSizeMb: 40,
+    checkAlivePeriod: 1000,
+    checkAliveTimeout: 200,
+    maxCpuUsage: {user: 500000, system: 300000},
+    maxMemoryUsage: {rss: 1000000000}
+};
 
-    const childProcess = fork(`${dir}fork.mjs`, {
-        execArgv,
-        serialization: "advanced"
-    });
+export default class ModuleSandbox extends EventEmitter {
 
-    await waitForMessageOrKill(childProcess, "processReady", 1000);
-    childProcess.send(["init", {...conf, key}]);
-    await waitForMessageOrKill(childProcess, "initDone", 1000);
-    startProcessAliveWatcher(childProcess, key, conf).catch(() => void.0);
-    childProcess.send(["initModules", {...conf, moduleDescriptions}]);
-    const modules = await waitForMessageOrKill(childProcess, "initModulesDone", 1000);
-    const result = {};
-    for (const identifier in modules) {
-        const exportNames = modules[identifier];
-        const callbacks = result[identifier] = {};
-        for (let method of exportNames) {
-            let methodCallId = 0;
-            callbacks[method] = function(...args){
-                let thisValue = this;
-                if (thisValue === callbacks) thisValue = null;
-                return new Promise((resolve, reject) => {
-                    if (childProcess.exitCode != null) reject("no process");
-                    const callId = methodCallId++;
-                    childProcess.send(["callMethod", {
-                        identifier,
-                        method,
-                        thisValue,
-                        args,
-                        callId
-                    }]);
-                    function onMessage(msg){
-                        if (!Array.isArray(msg)) return;
-                        const [type, data = {}] = msg;
-                        if (type !== "callMethodResult") return;
-                        if (data.identifier !== identifier) return;
-                        if (data.method !== method) return;
-                        if (data.callId !== callId) return;
-                        childProcess.off("message", onMessage);
-                        (data.success ? resolve : reject)(data.result);
-                    }
-                    function unLink(arg){
-                        console.log("UNKINK")
-                        reject(new Error("process killed by DELAY"));
-                        childProcess.off("message", onMessage);
-                    }
-                    childProcess.on("message", onMessage);
-                    childProcess.on("exit", unLink)
-                })
+    /** @type {string|null} */
+    #exitCode = null;
+    #childProcess = null;
+    #invokeCount = Number.MIN_SAFE_INTEGER;
+    #remoteRegistry = new RemoteRegistry((data) => {
+        console.log("@@@@@@@@@@@@@@@@@@@@@@@@@ RC MAIN SEND");
+        console.dir(data, {depth: null});
+        this.#childProcess.send(["remote", data]);
+    })
 
-            }
-        }
+    get exitCode(){
+        return this.#exitCode;
     }
-    return result;
+
+    #setExitCode(value){
+        this.emit("exit", value);
+        if (this.#exitCode) return;
+        this.#exitCode = value;
+    }
+
+    /** @private */
+    constructor(childProcess) {
+        super();
+        this.#childProcess = childProcess
+        this.#childProcess.on("message", ([type, messageData]) => {
+            if (type !== "remote") return;
+            console.log("@@@@@@@@@@@@@@@@@@@@@@@@@ RC MAIN RECEIVE");
+            console.dir(messageData, {depth: null});
+             this.#remoteRegistry.receive(messageData);
+        });
+    }
+
+    kill(){
+        this.#setExitCode({reason: "kill"});
+        this.#childProcess.kill('SIGKILL');
+    }
+
+    invoke(identifier, method, thisValue, args, timeout = 1000){
+        return this.#remoteRegistry.callRemoteCallback(identifier, method, thisValue, args)
+    }
+
+    /**
+     *
+     * @param moduleDescriptions
+     * @param config {ModulesConfig}
+     * @returns {Promise<ModuleSandbox>}
+     */
+    static async create(moduleDescriptions, config = {}){
+        const conf = {...config, ...baseConfig};
+        const key = crypto.getRandomValues(Buffer.alloc(32)).toString('hex');
+        const execArgv = [
+            `--allow-fs-read=${path.join(dir, "isolated", "*")}`,
+            `--experimental-permission`, `--experimental-policy=${path.join(dir, "isolated", "policy.json")}`,
+            ...conf.execArgv
+        ];
+
+        console.log("EXECS ARGVS", execArgv);
+
+        const childProcess = fork(`${path.join(dir, "isolated", "fork.mjs")}`, {
+            execArgv,
+            serialization: conf.serialization,
+            // stdio: "ignore" TODO: enable
+        });
+
+        const sandbox = new ModuleSandbox(childProcess);
+        childProcess.once("exit", () => {
+            sandbox.#setExitCode({reason: "exit", value: childProcess.exitCode, expected: null});
+        })
+
+        function onKillByResourceMonitor(reason, value, expected){
+            sandbox.#setExitCode(reason, value, expected);
+        }
+
+        await waitForMessageOrKill(childProcess, "processReady", 1000);
+        childProcess.send(["init", {...conf, key}]);
+        await waitForMessageOrKill(childProcess, "initDone", 1000);
+        startProcessAliveWatcher(childProcess, key, conf, onKillByResourceMonitor).catch(() => void.0);
+        childProcess.send(["createModules", {...conf, moduleDescriptions}]);
+        console.log("WAIT createModulesDone");
+        await waitForMessageOrKill(childProcess, "createModulesDone", 1000);
+        // todo onl
+        return sandbox;
+    }
 }
 
-async function waitForMessageOrKill(childProcess, messageType, timeout = null) {
+function timeoutFnKill(childProcess){
+    childProcess.kill('SIGKILL');
+}
+
+async function waitForMessageOrKill(childProcess, messageType, timeout = null, timeoutFn = timeoutFnKill) {
     return new Promise((resolve, reject) => {
         const timerId = timeout != null ? setTimeout(() => {
-            childProcess.kill('SIGKILL');
+            console.log("send sigkill by timeout message", messageType);
+            timeoutFn(childProcess);
             reject();
         }, timeout) : null;
         function onMessage(msg){
@@ -103,14 +138,35 @@ async function waitForMessageOrKill(childProcess, messageType, timeout = null) {
     });
 }
 
-async function startProcessAliveWatcher(childProcess, safeKey, conf){
-    const checkoutTime = conf.checkAlivePeriod + conf.checkAliveTimeout;
-    while (childProcess.exitCode == null) {
-        const checkResult = await waitForMessageOrKill(childProcess, "alive-report", checkoutTime);
-        if (checkResult?.key !== safeKey) break;
-        if (!checkResult.user || checkResult.user > conf.maxCpuUsageUser) break;
-        if (!checkResult.system || checkResult.system > conf.maxCpuUsageSystem) break;
+async function startProcessAliveWatcher(childProcess, safeKey, conf, onError){
+    const {maxCpuUsage, maxMemoryUsage, checkAlivePeriod, checkAliveTimeout} = conf;
+    const checkoutTime = checkAlivePeriod + checkAliveTimeout;
+    while (true) {
+        if (childProcess.exitCode != null) breakThrow("exitCode", childProcess.exitCode, null);
+        const checkResult = await waitForMessageOrKill(childProcess, "alive-report", checkoutTime, breakOnTimeout);
+        if (checkResult?.key !== safeKey) breakThrow("key");
+        if (maxCpuUsage) {
+            for (let [key, maxValue] of Object.entries(maxCpuUsage)) {
+                const value = checkResult.maxCpuUsage[key];
+                if (value > maxValue) breakThrow(`cpuUsage.${key}`, value, maxValue);
+            }
+        }
+        if (maxMemoryUsage) {
+            for (let [key, maxValue] of Object.entries(maxMemoryUsage)) {
+                const value = checkResult.maxMemoryUsage[key];
+                if (value > maxValue) breakThrow(`memoryUsage.${key}`, value, maxValue);
+            }
+        }
     }
-    childProcess.kill('SIGKILL');
+    function breakOnTimeout(){
+        breakThrow("timeout", -1, checkoutTime);
+    }
+    function breakThrow(reason, value, expected){
+        onError(reason, value, expected);
+        childProcess.kill('SIGKILL');
+        throw new Error(`Process killed by reason: ${reason}, value: ${value}, expected: ${expected}`);
+    }
+
 }
 
+// Можно возвращать Промисы и передавать коллбэки, испрользуя WeakRef
