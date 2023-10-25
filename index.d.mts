@@ -22,13 +22,24 @@ export declare interface ModulesDescription {
 }
 
 declare class ModuleSandbox<const T extends string> {
-    private constructor();
+    private constructor(
+        send: (message: any) => void,
+        getInvokeFunction?: (this: any, ...args: any) => () => any
+    );
     
     readonly exitCode: string|null;
     
     kill(): void;
     
-    invoke(identifier: T, method: string, thisValue: unknown, args: unknown[], timeout?: number): Promise<unknown>
+    invoke(
+        identifier: T,
+        method: string,
+        thisValue: unknown,
+        args: unknown[],
+        params?: {mapping: "json"|"process"|"link"}
+    ): Promise<unknown>
+    
+    receive(message: any): void;
     
     static create<T extends string>(desc: {[KEY in T]: ModulesDescription}, config?: ModulesConfig): ModuleSandbox<T>
 }

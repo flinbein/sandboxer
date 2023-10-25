@@ -65,8 +65,16 @@ export default class ModuleSandbox extends EventEmitter {
         this.#childProcess.kill('SIGKILL');
     }
 
-    invoke(identifier, method, thisValue, args, timeout = 1000){
-        return this.#remoteRegistry.callRemoteCallback(identifier, method, thisValue, args)
+    /**
+     * @param identifier {string}
+     * @param method {string}
+     * @param thisValue {*}
+     * @param args {Array<*>}
+     * @param mapping {"json"|"link"|"process"}
+     * @return {Promise<unknown>}
+     */
+    invoke(identifier, method, thisValue, args, {mapping = "link"} = {}){
+        return this.#remoteRegistry.callRemoteCallback([identifier, method, thisValue, args], {mapping})
     }
 
     /**
@@ -106,9 +114,8 @@ export default class ModuleSandbox extends EventEmitter {
         await waitForMessageOrKill(childProcess, "initDone", 1000);
         startProcessAliveWatcher(childProcess, key, conf, onKillByResourceMonitor).catch(() => void.0);
         childProcess.send(["createModules", {...conf, moduleDescriptions}]);
-        console.log("WAIT createModulesDone");
-        await waitForMessageOrKill(childProcess, "createModulesDone", 1000);
-        // todo onl
+        const errorMessage = await waitForMessageOrKill(childProcess, "createModulesDone", 1000);
+        if (errorMessage) throw new Error(String(errorMessage));
         return sandbox;
     }
 }

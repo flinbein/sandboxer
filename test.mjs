@@ -10,27 +10,32 @@ const sandbox = await ModuleSandbox.create({
                 return 0;
             }
             export const getNthUser = (index) => getUsers()[index];
-            export async function handleMessage(message){
+            export function handleMessage(message) {
                 console.log("Message from", this.name, message);
-                return 12321;
+                console.dir(getUsers());
+                return this.name + " SAID: "+message;
             }
         `,
         links: ['main']
     },
     main: {
         source: `
-            export const getUsers = () => ["john", "doe"];
+            export * from "main2";
+        `,
+        links: ['main2']
+    },
+    main2: {
+        source: `
+            export const getUsers = () => ["john", "doez"];
         `
     }
 });
 
 try {
     console.log("====== START RESPONSE");
-    // todo: invoke other way
-    const result = await sandbox.invoke("room","handleMessage",{name: "DPOHVAR"}, ["Hello"], 1000);
-    // const listGenerator = await sandbox.invoke("room","handleMessage",{name: "DPOHVAR"}, ["Hello"], 1000);
-    // const array = await arrayFromAsync(await listGenerator(5));
-    console.log("====== call listGenerator DONE", result);
+    const a = [1,2,3];
+    const result = await sandbox.invoke("room","handleMessage",{name: "DPOHVAR"}, ["Hello", a], {mapping: "json"});
+    console.log("====== DONE RESPONSE", result);
 } catch (e) {
     console.log("====== ERROR RESPONSE", e);
 }

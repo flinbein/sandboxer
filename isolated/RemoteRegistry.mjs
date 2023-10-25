@@ -18,16 +18,18 @@ export default class RemoteRegistry {
      */
     #remoteCallPromiseMap = new Map();
 
-    callRemoteCallback = ((registry) => async function(...args){
-        const thisArg = this === registry ? null : this;
+    /**
+     * @type {(Array<*>, {mapping?: "link"|"process"|"json"}): Promise<unknown>}
+     */
+    callRemoteCallback = ((registry) => async function(args, {mapping = "link"} = {}){
         const callId = registry.#getNextRemoteCallId();
         const promise = registry.#createPromiseWithResolvers();
         registry.#remoteCallPromiseMap.set(callId, promise);
         try {
             await registry.#send(encode => ({
                 type: "remoteCall",
-                data: { callId, callContext: encode([thisArg, ...args]) }
-            }));
+                data: { callId, mapping, args: encode(args) }
+            }), mapping);
         } catch (e) {
             registry.#remoteCallPromiseMap.delete(callId);
             throw e;
@@ -37,9 +39,25 @@ export default class RemoteRegistry {
 
     /**
      * @param encodeCallback {(encode: (data: any) => any) => any}
+     * @param mapping {"link"|"json"|"process"}
      * @returns {Promise<void>}
      */
-    async #send(encodeCallback){
+    async #send(encodeCallback, mapping = "link"){
+        if (mapping === "json") {
+            const data = encodeCallback(v => {
+                if (v instanceof Error) {
+                    return JSON.stringify({name: v.name, message: v.message});
+                }
+                return JSON.stringify(v);
+            });
+            this.#sendToRemote(data);
+            return;
+        }
+        if (mapping === "process") {
+            const data = encodeCallback(v => v);
+            this.#sendToRemote(data);
+            return;
+        }
         const context = new EncodeContext();
         try {
             const data = encodeCallback(this.#encode.bind(this, context));
@@ -106,7 +124,7 @@ export default class RemoteRegistry {
         }
         const result = {type: "value", value: data};
         context.saveLink(data, result);
-        return data;
+        return result;
     }
 
     /**
@@ -125,10 +143,9 @@ export default class RemoteRegistry {
         const resolve = (status) => (value) => {
             const res = weakResult.deref();
             if (!res) return;
-            if (value in res) return; // late
+            if ("value" in res) return; // late
             res.status = status;
-            res.value = value;
-
+            res.value = this.#encode(context, value);
         }
 
         promise.then(resolve("fulfilled"), resolve("rejected"));
@@ -277,86 +294,103 @@ export default class RemoteRegistry {
         }
     }
 
-    #onRemoteCall({callId, callContext}){
+    async #onRemoteCall({callId, args, mapping}){
         try {
-            const [thisArg, ...args] = this.#decode(callContext);
-            const value = this.#remoteCallback.apply(thisArg ?? undefined, args);
-            return this.#sendRemoteCallResult({callId, status: "fulfilled", value});
+            // todo get function
+            const decodedArgs = this.#decode(args, mapping);
+            const callable = await this.#remoteCallback.apply(undefined, decodedArgs);
+            const value = callable();
+            return this.#sendRemoteCallResult({callId, status: "fulfilled", mapping, value});
         } catch (e) {
-            return this.#sendRemoteCallResult({callId, status: "rejected", value: e});
+            return this.#sendRemoteCallResult({callId, status: "rejected", mapping, value: e});
         }
     }
 
-    #onRemoteCallResult({callId, status, value}){
+    #onRemoteCallResult({callId, status, value, mapping}){
         const promise = this.#remoteCallPromiseMap.get(callId);
         const {resolve, reject} = this.#promiseResolversWeakMap.get(promise);
         this.#promiseResolversWeakMap.delete(promise);
-        const decodedValue = this.#decode(value);
+        const decodedValue = this.#decode(value, mapping);
         (status === "fulfilled" ? resolve : reject)(decodedValue);
     }
 
-    async #sendRemoteCallResult({callId, status, value}){
+    async #sendRemoteCallResult({callId, status, value, mapping}){
         try {
             await this.#send((encode) => ({
                 type: "remoteCallResult",
-                data: {callId, status, value: encode(value)}
-            }));
+                data: {callId, status, mapping, value: encode(value)}
+            }), mapping);
         } catch (e) {
             try {
                 await this.#send(encode => ({
                     type: "remoteCallResult",
-                    data: {callId, status: "rejected", value: encode(e)}
-                }));
+                    data: {callId, status: "rejected", mapping, value: encode(e)}
+                }), mapping);
             } catch {
                 await this.#send(encode => ({
                     type: "remoteCallResult",
-                    data: {callId, status: "rejected", value: encode("parse error")}
-                }));
+                    data: {callId, status: "rejected", mapping, value: encode("parse error")}
+                }), mapping);
             }
         }
     }
 
-    #decode(data, context = new DecodeContext()){
-        if (data === null) return data;
-        if (typeof data !== "object") return data;
-        if (data.type === "link") return context.getLink(data.value);
-        if (data.type === "value") return context.registerLink(data.id, data.value);
+    #decode(data, mapping = "link"){
+        if (mapping === "process") return data;
+        if (mapping === "json") return JSON.parse(data);
+        const decodeContext = new DecodeContext();
+        let result;
+        this.#decodeStep(data, decodeContext, (r) => {result = r});
+        if (!decodeContext.isEmpty()) throw new Error("#decode links error")
+        return result;
+    }
+
+    /**
+     * @param data {object}
+     * @param decodeContext {DecodeContext}
+     * @param onSuccess {(value: *) => void}
+     * @return {*|{type: string, value: *}|void}
+     */
+    #decodeStep(data, decodeContext, onSuccess){
+        if (data === null) return onSuccess(data);
+        if (typeof data !== "object") return onSuccess(data);
+        if (data.type === "link") return decodeContext.resolveLink(data.value, onSuccess);
+        if (data.type === "value") return onSuccess(decodeContext.registerLink(data.id, data.value));
         if (data.type === "array") {
-            const result = [];
-            context.registerLink(data.id, result);
-            for (const element of data.value) {
-                const item = this.#decode(element, context);
-                result.push(item);
+            const result = Array.from({length: data.value.length})
+            decodeContext.registerLink(data.id, result);
+            for (const [index,element] of data.value.entries()) {
+                this.#decodeStep(element, decodeContext, (itemResult) => result[index] = itemResult);
             }
-            return result;
+            return onSuccess(result);
         }
         if (data.type === "object") {
             const result = {};
-            context.registerLink(data.id, result);
+            decodeContext.registerLink(data.id, result);
             for (const [key, item] of data.value) {
-                result[key] = this.#decode(item, context);
+                this.#decodeStep(item, decodeContext, (itemResult) => result[key] = itemResult);
             }
-            return result;
+            return onSuccess(result);
         }
         if (data.type === "promise") {
-            const result = this.#decodePromise(data);
-            context.registerLink(data.id, result);
-            return result;
+            const result = this.#decodePromise(data, decodeContext);
+            decodeContext.registerLink(data.id, result);
+            return onSuccess(result);
         }
         if (data.type === "fn") {
-            return context.registerLink(data.id, this.#decodeFunction(data));
+            return onSuccess(decodeContext.registerLink(data.id, this.#decodeFunction(data)));
         }
         if (data.type === "itr") {
-            return context.registerLink(data.id, this.#decodeIterable(data));
+            return onSuccess(decodeContext.registerLink(data.id, this.#decodeIterable(data)));
         }
-        if (data.type === "undefined") return undefined;
+        if (data.type === "undefined") return onSuccess(undefined);
         if (data.type === "number") {
-            if (data.value === "NaN") return Number.NaN;
-            if (data.value === "I") return Number.POSITIVE_INFINITY;
-            if (data.value === "-I") return Number.NEGATIVE_INFINITY;
+            if (data.value === "NaN") return onSuccess(Number.NaN);
+            if (data.value === "I") return onSuccess(Number.POSITIVE_INFINITY);
+            if (data.value === "-I") return onSuccess(Number.NEGATIVE_INFINITY);
         }
         if (data.type === "date") {
-            return new Date(data.value == null ? Number.NaN : +data.value);
+            return onSuccess(new Date(data.value == null ? Number.NaN : +data.value));
         }
         console.error("[RemoteRegistry] unknown type of encoded data", data);
         throw new Error("unknown type of encoded data");
@@ -368,9 +402,12 @@ export default class RemoteRegistry {
     #hookRefMap = new Map()
     /** @type {WeakMap<Promise, {resolve: (x)=>void, reject: (x)=>void}>} */
     #promiseResolversWeakMap = new WeakMap()
-    #decodePromise({value, status}){
-        if (status === "fulfilled") return Promise.resolve(value);
-        if (status === "rejected") return Promise.reject(value);
+    #decodePromise({value, status}, decodeContext){
+        if (status === "fulfilled" || status === "rejected") {
+            return new Promise((resolve, reject) => {
+                this.#decodeStep(value, decodeContext, status === "fulfilled" ? resolve : reject)
+            })
+        }
         const promiseRef = this.#hookRefMap.get(value);
         let promise = promiseRef?.deref();
         if (promise) return promise;
@@ -508,7 +545,7 @@ class EncodeContext {
     /** @type {"parse"|"send"|"success"|"error"} */
     status = "parse"
     #linkId = 0;
-    /** @type {Map<Promise<*>, {type: "promise"}>} */
+    /** @type {Map<*, object>} */
     linksMap = new Map();
     #successTasks = new Set();
     #errorTasks = new Set();
@@ -539,6 +576,7 @@ class EncodeContext {
     resolveLink(value){
         const encodedValue = this.linksMap.get(value);
         if (!encodedValue) return null;
+        if ("id" in encodedValue) return {type: "link", value: encodedValue.id};
         const id = this.nextLinkId();
         encodedValue.id = id;
         return {type: "link", value: id}
@@ -563,16 +601,34 @@ class EncodeContext {
 }
 
 class DecodeContext {
+    /** @type {Map<number, *>}*/
     #linksMap = new Map();
+    /** @type {Map<number, Array<(data: *) => void>>}*/
+    #linkListeners = new Map();
 
     registerLink(id, value) {
-        if (id != null) this.#linksMap.set(id, value);
+        if (id == null) return value;
+        this.#linksMap.set(id, value);
+        const listeners = this.#linkListeners.get(id);
+        this.#linkListeners.delete(id);
+        if (listeners) for (let listener of listeners) listener(value);
         return value
     }
 
-    getLink(id){
-        if (!this.#linksMap.has(id)) throw new Error("[DecodeContext] unexpected link "+id);
-        this.#linksMap.get(id);
+    isEmpty(){
+        return this.#linkListeners.size === 0;
+    }
+
+    resolveLink(id, onSuccess){
+        if (this.#linksMap.has(id)) {
+            return onSuccess(this.#linksMap.get(id));
+        }
+        if (this.#linkListeners.has(id)) {
+            this.#linkListeners.get(id).push(onSuccess);
+        } else {
+            this.#linkListeners.set(id, [onSuccess]);
+
+        }
     }
 }
 

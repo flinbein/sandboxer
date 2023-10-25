@@ -71,8 +71,6 @@ async function initUserModules(params){
             });
         }
     }));
-
-    handleCommand(checkSecondMessageArg("call"), onCallModuleMethod)
 }
 
 handleCommand(checkSecondMessageArg("init"), onInitProcess, true);
@@ -80,34 +78,10 @@ handleCommand(checkSecondMessageArg("init"), onInitProcess, true);
 async function onInitModules(data){
     try {
         await initUserModules(data);
-        console.log("INIT MOD 1");
-        processSend(["createModulesDone", true]);
+        processSend(["createModulesDone", false]);
     } catch (e) {
-        console.log("INIT MOD 2", e);
-        processSend(["createModulesDone", null]);
-    }
-}
-
-async function onCallModuleMethod(data){
-    const {identifier, method, callId} = data;
-    function sendResult(success, result){
-        console.log("SEND-RESULT_", success, result);
-        processSend(["callResult", {identifier, method, callId, success, result}]);
-    }
-    try {
-        const result = await callModuleMethod(data);
-        console.log("GO-SEND-RESULT", result);
-        sendResult(true, result);
-    } catch (e) {
-        console.log("GO-SEND-RESULT_E", e);
-        try {
-            sendResult(false, e);
-            console.log("GO-SEND-RESULT_E1");
-        } catch (parseError) {
-            const errorMessage = (e && e instanceof Error) ? e.message : "unknown error";
-            console.log("GO-SEND-RESULT_E2");
-            sendResult(false, errorMessage);
-        }
+        console.error("Error on init modules", e);
+        processSend(["createModulesDone", e?.message || "unknown error on init modules"]);
     }
 }
 
@@ -121,28 +95,13 @@ const remoteRegistry = new RemoteRegistry(
         if (module.status !== "evaluated") await module.evaluate({breakOnSigint: true});
         const moduleFun = module.namespace[method];
         if (typeof moduleFun !== "function") throw new Error(`exported method ${identifier}.${method} is not a function`);
-        return moduleFun.apply(thisValue, args);
+        return () => moduleFun.apply(thisValue, args);
     }
 );
 
 handleCommand(checkSecondMessageArg("remote"), (data) => {
     remoteRegistry.receive(data);
 });
-
-
-// todo remove?
-async function callModuleMethod({identifier, method, thisValue, args, timeout}){
-    const module = moduleMap.get(identifier);
-    if (!module) throw new Error("Can not cal method of unknown module: "+identifier);
-    if (module.status !== "evaluated") await module.evaluate({breakOnSigint: true});
-    const moduleFun = module.namespace[method];
-    if (typeof moduleFun !== "function") throw new Error(`exported method ${identifier}.${method} is not a function`);
-    if (!timeout) return moduleFun.apply(thisValue, args);
-    return Promise.race([
-        moduleFun.apply(thisValue, args),
-        new Promise((_, reject) => setTimeout(reject, timeout))
-    ]);
-}
 
 
 
