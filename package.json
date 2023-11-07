@@ -2,14 +2,15 @@
   "name": "sandboxer",
   "description": "manage modules in sandbox",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "node": ">=20.0.0",
-  "module": "index.mjs",
+  "module": "./index.mjs",
+  "types": "./index.d.mts",
   "repository": "https://github.com/flinbein/sandboxer.git",
   "author": "dpohvar@gmail.com",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^20.8.4",
+    "@types/node": "^20.9.0",
     "typescript": "^5.2.2"
   }
 }
