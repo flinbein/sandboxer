@@ -4,6 +4,7 @@
   "type": "module",
   "version": "1.0.1",
   "node": ">=20.0.0",
+  "main": "./index.mjs",
   "module": "./index.mjs",
   "types": "./index.d.mts",
   "repository": "https://github.com/flinbein/sandboxer.git",
