@@ -52,7 +52,6 @@ async function initUserModules(params){
         moduleMap.set(name, module);
     }
 
-    console.log("INIT-1");
     await Promise.all([...moduleMap.values()].map(module => module.link(link)));
 
     function link(specifier, module, extra){

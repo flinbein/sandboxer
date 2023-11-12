@@ -13,7 +13,7 @@ const baseConfig = {
         `--disallow-code-generation-from-strings`,
         `--disable-proto=delete`,
         `--no-experimental-fetch`,
-        // `--no-warnings`,
+        `--no-warnings`,
         `--experimental-wasm-modules`
     ],
     serialization: "advanced",
@@ -33,8 +33,7 @@ export default class ModuleSandbox extends EventEmitter {
     #childProcess = null;
     #invokeCount = Number.MIN_SAFE_INTEGER;
     #remoteRegistry = new RemoteRegistry((data) => {
-        console.log("@@@@@@@@@@@@@@@@@@@@@@@@@ RC MAIN SEND");
-        console.dir(data, {depth: null});
+        this.emit("data-send", data);
         this.#childProcess.send(["remote", data]);
     })
 
@@ -54,9 +53,8 @@ export default class ModuleSandbox extends EventEmitter {
         this.#childProcess = childProcess
         this.#childProcess.on("message", ([type, messageData]) => {
             if (type !== "remote") return;
-            console.log("@@@@@@@@@@@@@@@@@@@@@@@@@ RC MAIN RECEIVE");
-            console.dir(messageData, {depth: null});
-             this.#remoteRegistry.receive(messageData);
+            this.emit("data-receive", messageData);
+            this.#remoteRegistry.receive(messageData);
         });
     }
 
@@ -73,8 +71,8 @@ export default class ModuleSandbox extends EventEmitter {
      * @param mapping {"json"|"link"|"process"}
      * @return {Promise<unknown>}
      */
-    invoke(identifier, method, thisValue, args, {mapping = "link"} = {}){
-        return this.#remoteRegistry.callRemoteCallback([identifier, method, thisValue, args], {mapping})
+    invoke(identifier, method, thisValue, args, params){
+        return this.#remoteRegistry.callRemoteCallback([identifier, method, thisValue, args], params)
     }
 
     /**
@@ -92,12 +90,10 @@ export default class ModuleSandbox extends EventEmitter {
             ...conf.execArgv
         ];
 
-        console.log("EXECS ARGVS", execArgv);
-
         const childProcess = fork(`${path.join(dir, "isolated", "fork.mjs")}`, {
             execArgv,
             serialization: conf.serialization,
-            // stdio: "ignore" TODO: enable
+            // stdio: "ignore"
         });
 
         const sandbox = new ModuleSandbox(childProcess);
@@ -127,7 +123,6 @@ function timeoutFnKill(childProcess){
 async function waitForMessageOrKill(childProcess, messageType, timeout = null, timeoutFn = timeoutFnKill) {
     return new Promise((resolve, reject) => {
         const timerId = timeout != null ? setTimeout(() => {
-            console.log("send sigkill by timeout message", messageType);
             timeoutFn(childProcess);
             reject();
         }, timeout) : null;

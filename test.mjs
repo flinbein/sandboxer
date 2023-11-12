@@ -10,9 +10,13 @@ const sandbox = await ModuleSandbox.create({
                 return 0;
             }
             export const getNthUser = (index) => getUsers()[index];
-            export function handleMessage(message) {
+            export function handleMessage(message, fn, pr) {
                 console.log("Message from", this.name, message);
                 console.dir(getUsers());
+                setTimeout(() => {
+                   console.log("pr=", pr);
+                }, 15000);
+                 fn(102).then(v => console.log("await fn(102) returns:",v));
                 return this.name + " SAID: "+message;
             }
         `,
@@ -30,11 +34,27 @@ const sandbox = await ModuleSandbox.create({
         `
     }
 });
+sandbox.on("data-send", (data) => {
+    console.log(">>>>>>>>>>>>>>>>>>>> SEND")
+    console.dir(data, {depth: 20})
+})
+sandbox.on("data-receive", (data) => {
+    console.log("<<<<<<<<<<<<<<<<<<<< RECEIVE")
+    console.dir(data, {depth: 20})
+})
+sandbox.on("exit", () => {
+    console.log("==================== EXIT")
+})
 
 try {
     console.log("====== START RESPONSE");
-    const a = [1,2,3];
-    const result = await sandbox.invoke("room","handleMessage",{name: "DPOHVAR"}, ["Hello", a], {mapping: "json"});
+    const a = (x) => {
+        console.log("called-A-with-param", x);
+        return x + 1;
+    };
+    const b = new Promise(r => 0);
+    const mappingParams = {mapping: "link", responseMapping: "json", hookMode: ({mapping: "json", responseMapping: "ignore"})}
+    const result = await sandbox.invoke("room","handleMessage",{name: "DPOHVAR"}, ["Hello", a, b], mappingParams);
     console.log("====== DONE RESPONSE", result);
 } catch (e) {
     console.log("====== ERROR RESPONSE", e);

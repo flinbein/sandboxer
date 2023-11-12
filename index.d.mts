@@ -36,12 +36,23 @@ declare class ModuleSandbox<const T extends string> {
         method: string,
         thisValue: unknown,
         args: unknown[],
-        params?: {mapping: "json"|"process"|"link"}
+        params?: InvokeParams
     ): Promise<unknown>
     
     receive(message: any): void;
     
     static create<T extends string>(desc: {[KEY in T]: ModulesDescription}, config?: ModulesConfig): ModuleSandbox<T>
 }
+
+interface InvokeParams {
+    mapping?: "json"|"process"|"link",
+    responseMapping?: "json"|"process"|"link"|"ignore"
+    hookMode?: ParamOrCalculated<{
+        mapping?: "json"|"process"|"link",
+        responseMapping?: "json"|"process"|"link"|"ignore"
+    }, [Function|Iterable<any>]>
+}
+
+type ParamOrCalculated<P,A extends unknown[]> = P | ((...args: A) => P)
 
 export default ModuleSandbox;

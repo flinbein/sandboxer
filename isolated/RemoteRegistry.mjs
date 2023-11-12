@@ -1,3 +1,11 @@
+/**
+ * @typedef {
+ *  undefined
+ *  | {mapping:"link"|"json"|"process", responseMapping:"link"|"json"|"process"|"ignore"}
+ *  | ((fn: Function|Iterable) => {mapping:"link"|"json"|"process", responseMapping:"link"|"json"|"process"|"ignore"})
+ * } HookMode
+ */
+
 export default class RemoteRegistry {
 
     #sendToRemote;
@@ -18,18 +26,21 @@ export default class RemoteRegistry {
      */
     #remoteCallPromiseMap = new Map();
 
-    /**
-     * @type {(Array<*>, {mapping?: "link"|"process"|"json"}): Promise<unknown>}
-     */
-    callRemoteCallback = ((registry) => async function(args, {mapping = "link"} = {}){
+    callRemoteCallback = ((registry) => async function(args, {mapping = "link", responseMapping = "link", hookMode} = {}){
+        if (responseMapping === "ignore") {
+            return await registry.#send(encode => ({
+                type: "remoteCall",
+                data: { mapping, responseMapping, args: encode(args) } // no call id
+            }), mapping, hookMode);
+        }
         const callId = registry.#getNextRemoteCallId();
         const promise = registry.#createPromiseWithResolvers();
         registry.#remoteCallPromiseMap.set(callId, promise);
         try {
             await registry.#send(encode => ({
                 type: "remoteCall",
-                data: { callId, mapping, args: encode(args) }
-            }), mapping);
+                data: { callId, mapping, responseMapping, args: encode(args) }
+            }), mapping, hookMode);
         } catch (e) {
             registry.#remoteCallPromiseMap.delete(callId);
             throw e;
@@ -40,9 +51,10 @@ export default class RemoteRegistry {
     /**
      * @param encodeCallback {(encode: (data: any) => any) => any}
      * @param mapping {"link"|"json"|"process"}
+     * @param hookMode {HookMode}
      * @returns {Promise<void>}
      */
-    async #send(encodeCallback, mapping = "link"){
+    async #send(encodeCallback, mapping = "link", hookMode = {mapping: "link", responseMapping: "link"} ){
         if (mapping === "json") {
             const data = encodeCallback(v => {
                 if (v instanceof Error) {
@@ -58,7 +70,7 @@ export default class RemoteRegistry {
             this.#sendToRemote(data);
             return;
         }
-        const context = new EncodeContext();
+        const context = new EncodeContext(hookMode);
         try {
             const data = encodeCallback(this.#encode.bind(this, context));
             await new Promise(r => setImmediate(r)); // resolve promises
@@ -150,16 +162,17 @@ export default class RemoteRegistry {
 
         promise.then(resolve("fulfilled"), resolve("rejected"));
 
-
         context.onBeforeSend(() => {
             if (data.status) return;
             id = this.#getNextHookId();
             data.value = id;
             data.status = "pending";
+            this.#promiseClearRegistry.register(promise, id, promise);
             this.#hookIdMap.set(promise, id);
         })
         const onPromiseDone = (status) => (value) => {
             void this.#sendPromiseUpdate(id, status, value);
+            this.#promiseClearRegistry.unregister(promise);
             this.#hookIdMap.delete(promise);
         }
 
@@ -175,27 +188,34 @@ export default class RemoteRegistry {
     }
 
 
+    // TODO CHECK WHY NO LINK
     #promiseClearRegistry = new FinalizationRegistry((id) => {
-        void this.#sendPromiseUpdate(id, "clear", null);
+        void this.#sendPromiseUpdate(id, "clear");
     })
 
-    async #sendPromiseUpdate(id, status, value){
-        try {
+    async #sendPromiseUpdate(id, status, value, mapping, responseMapping){
+        if (status === "clear") {
             return this.#send(encode => ({
                 type: "promiseUpdate",
-                data: {id, status, value: encode(value)}
+                data: {id, status}
             }));
+        }
+        try {
+            return await this.#send(encode => ({
+                type: "promiseUpdate",
+                data: {id, status, value: encode(value), mapping, responseMapping}
+            }), mapping, {mapping, responseMapping});
         } catch (error) {
             try {
-                return this.#send(encode => ({
+                return await this.#send(encode => ({
                     type: "promiseUpdate",
-                    data: {id, status: "rejected", value: encode(error)}
-                }));
+                    data: {id, status: "rejected", value: encode(error), mapping, responseMapping}
+                }), mapping, {mapping, responseMapping});
             } catch {
-                return this.#send(encode => ({
+                return await this.#send((encode) => ({
                     type: "promiseUpdate",
-                    data: {id, status: "rejected", value: "error on serialize promise data"}
-                }));
+                    data: {id, status: "rejected", value: encode("error on serialize promise data"), mapping, responseMapping}
+                }), mapping, {mapping, responseMapping});
             }
         }
 
@@ -212,19 +232,22 @@ export default class RemoteRegistry {
             this.#hookIdMap.set(callable, value);
         }
         this.#callableRegistryMap.set(value, callable);
-        if (typeof callable === "function") return {
-            type: "fn",
-            value,
-            length: callable.length,
-            name: callable.name
-        }
+        const {mapping, responseMapping} = context.getHookMode(callable);
         context.onError(() => {
             this.#callableRegistryMap.delete(value);
         })
-        return {type: "itr", value};
+        if (typeof callable === "function") return {
+            type: "fn",
+            value,
+            mapping,
+            responseMapping,
+            length: callable.length,
+            name: callable.name
+        }
+        return {type: "itr", value, mapping, responseMapping};
     }
 
-    async #onHookCall({id, action, callId, callContext}){
+    async #onHookCall({id, action, callId, callContext, mapping, responseMapping}){
         if (action === "clear") {
             this.#callableRegistryMap.delete(id);
             return;
@@ -240,69 +263,71 @@ export default class RemoteRegistry {
         else if (action === "next") fn = callable.next.bind(callable);
         else if (action === "throw") fn = callable.throw.bind(callable);
         else if (action === "return") fn = callable.return.bind(callable);
-        if (typeof fn !== "function") {
-            void this.#sendHookCallResult({id, callId, status: "rejected", value: "not a function"})
+        if (callId != null && typeof fn !== "function") {
+            void this.#sendHookCallResult({id, callId, status: "rejected", value: "not a function", mapping: responseMapping})
             return;
         }
-        const [thisArg, ...args] = this.#decode(callContext);
+        const [thisArg, ...args] = this.#decode(callContext, mapping);
         try {
             const value = fn.apply(thisArg, args);
-            void this.#sendHookCallResult({id, callId, status: "fulfilled", value})
+            if (callId != null) void this.#sendHookCallResult({id, callId, status: "fulfilled", value, mapping: responseMapping})
         } catch (error) {
-            void this.#sendHookCallResult({id, callId, status: "rejected", value:error})
+            if (callId != null) void this.#sendHookCallResult({id, callId, status: "rejected", value:error, mapping: responseMapping})
         }
     }
 
-    async #sendHookCallResult({id, callId, status, value}){
+    async #sendHookCallResult({id, callId, status, value, mapping}){
         try {
             await this.#send(encode => ({
                 type: "hookResult",
-                data: {id, callId, status, value: encode(value)}
-            }));
+                data: {id, callId, status, value: encode(value), mapping, responseMapping: mapping}
+            }), mapping, {mapping, responseMapping: mapping});
         } catch (e) {
             try {
                 await this.#send(encode => ({
                     type: "hookResult",
-                    data: {id, callId, status: "rejected", value: encode(e)}
-                }));
+                    data: {id, callId, status: "rejected", value: encode(e), mapping, responseMapping: mapping}
+                }), mapping, {mapping, responseMapping: mapping});
             } catch {
                 await this.#send(encode => ({
                     type: "hookResult",
-                    data: {id, callId, status: "rejected", value: encode("parse error")}
-                }));
+                    data: {id, callId, status: "rejected", value: encode("parse error"), mapping, responseMapping: mapping}
+                }), mapping, {mapping, responseMapping: mapping});
             }
         }
     }
 
     // ===== Receive JSON =====
 
-    receive = ({type, data}) =>{
+    receive = ({type, data}) => {
         if (type === "promiseUpdate") {
-            return this.#onPromiseUpdate(data);
+            return void this.#onPromiseUpdate(data);
         }
         if (type === "hook") {
-            return this.#onHookCall(data);
+            return void this.#onHookCall(data);
         }
         if (type === "hookResult") {
-            return this.#onHookCallResult(data);
+            return void this.#onHookCallResult(data);
         }
         if (type === "remoteCall") {
-            return this.#onRemoteCall(data);
+            return void this.#onRemoteCall(data);
         }
         if (type === "remoteCallResult") {
-            return this.#onRemoteCallResult(data);
+            return void this.#onRemoteCallResult(data);
         }
     }
 
-    async #onRemoteCall({callId, args, mapping}){
+    async #onRemoteCall({callId, args, mapping, responseMapping}){
         try {
             // todo get function
             const decodedArgs = this.#decode(args, mapping);
             const callable = await this.#remoteCallback.apply(undefined, decodedArgs);
             const value = callable();
-            return this.#sendRemoteCallResult({callId, status: "fulfilled", mapping, value});
+            if (callId == null) return;
+            return this.#sendRemoteCallResult({callId, status: "fulfilled", mapping: responseMapping, value});
         } catch (e) {
-            return this.#sendRemoteCallResult({callId, status: "rejected", mapping, value: e});
+            if (callId == null) return;
+            return this.#sendRemoteCallResult({callId, status: "rejected", mapping: responseMapping, value: e});
         }
     }
 
@@ -318,19 +343,19 @@ export default class RemoteRegistry {
         try {
             await this.#send((encode) => ({
                 type: "remoteCallResult",
-                data: {callId, status, mapping, value: encode(value)}
-            }), mapping);
+                data: {callId, status, mapping, responseMapping: mapping, value: encode(value)}
+            }), mapping, {mapping, responseMapping: mapping});
         } catch (e) {
             try {
                 await this.#send(encode => ({
                     type: "remoteCallResult",
-                    data: {callId, status: "rejected", mapping, value: encode(e)}
-                }), mapping);
+                    data: {callId, status: "rejected", mapping, responseMapping: mapping, value: encode(e)}
+                }), mapping, {mapping, responseMapping: mapping});
             } catch {
                 await this.#send(encode => ({
                     type: "remoteCallResult",
-                    data: {callId, status: "rejected", mapping, value: encode("parse error")}
-                }), mapping);
+                    data: {callId, status: "rejected", mapping, responseMapping: mapping, value: encode("parse error")}
+                }), mapping, {mapping, responseMapping: mapping});
             }
         }
     }
@@ -415,6 +440,7 @@ export default class RemoteRegistry {
         promise = this.#createPromiseWithResolvers();
         this.#hookRefMap.set(value, new WeakRef(promise))
         this.#hookIdMap.set(promise, value);
+        this.#callableClearRegistry.register(promise, value, promise); // ?????
         return promise;
     }
 
@@ -425,7 +451,7 @@ export default class RemoteRegistry {
         return promise;
     }
 
-    #onPromiseUpdate({id, status, value}){
+    #onPromiseUpdate({id, status, value, mapping}){
         const promiseRef = this.#hookRefMap.get(id);
         this.#hookRefMap.delete(id);
         if (status === "clear") return;
@@ -434,7 +460,8 @@ export default class RemoteRegistry {
         if (!promise) return;
         const {resolve, reject} = this.#promiseResolversWeakMap.get(promise);
         this.#promiseResolversWeakMap.delete(promise);
-        const decodedValue = this.#decode(value);
+        this.#callableClearRegistry.unregister(promise); // ?????
+        const decodedValue = this.#decode(value, mapping);
         (status === "fulfilled" ? resolve : reject)(decodedValue);
     }
 
@@ -443,14 +470,14 @@ export default class RemoteRegistry {
     #callableHandlerMap = new WeakMap();
     /** @type {WeakMap<Function|AsyncIterable, () => number>} */
     #callableCounterMap = new WeakMap();
-    #decodeFunction({value, name = ""}){
+    #decodeFunction({value, name = "", mapping = "link", responseMapping = "link"}){
         const registry = this;
         const funRef = this.#hookRefMap.get(value);
         let fun = funRef?.deref();
         if (fun) return fun;
         fun = ({
             async [name](...args){
-                return registry.#callHook(fun, "call", this, args);
+                return registry.#callHook(fun, "call", this, args, mapping, responseMapping);
             }
         })[name];
         this.#callableCounterMap.set(fun, createCounter(0));
@@ -461,7 +488,7 @@ export default class RemoteRegistry {
         return fun;
     }
 
-    #decodeIterable({value}){
+    #decodeIterable({value, mapping, responseMapping}){
         const itrRef = this.#hookRefMap.get(value);
         /** @type {AsyncIterable} */
         let itr = itrRef?.deref();
@@ -479,7 +506,7 @@ export default class RemoteRegistry {
 
         const iteratorAction = (action) => (...args) => {
             if (unregistered) return Promise.resolve({value: undefined, done: true})
-            const promise = this.#callHook(itr, action, null, args);
+            const promise = this.#callHook(itr, action, null, args, mapping, responseMapping);
             promise.then(unregisterIteratorOnDone, unregisterIterator);
             return promise;
         }
@@ -498,8 +525,15 @@ export default class RemoteRegistry {
         return itr;
     }
 
-    async #callHook(hook, action, thisArg, args){
+    async #callHook(hook, action, thisArg, args, mapping = "link", responseMapping = "link"){
         const id = this.#hookIdMap.get(hook);
+        if (responseMapping === "ignore") {
+            await this.#send(encode => ({
+                type: "hook",
+                data: {id, action, mapping, responseMapping, callContext: encode([thisArg, ...args])}
+            }), mapping, {mapping, responseMapping});
+            return;
+        }
         const callableHandlers = this.#callableHandlerMap.get(hook);
         const getNextCallId = this.#callableCounterMap.get(hook);
         const callId = getNextCallId();
@@ -508,8 +542,8 @@ export default class RemoteRegistry {
         try {
             await this.#send(encode => ({
                 type: "hook",
-                data: {id, action, callId, callContext: encode([thisArg, ...args])}
-            }));
+                data: {id, action, callId, mapping, responseMapping, callContext: encode([thisArg, ...args])}
+            }), mapping, {mapping, responseMapping});
         } catch (e) {
             callableHandlers.delete(callId);
             throw e;
@@ -517,7 +551,7 @@ export default class RemoteRegistry {
         return promise;
     }
 
-    #onHookCallResult({id, callId, status, value}){ // type: "hookResult"
+    #onHookCallResult({id, callId, status, value, mapping}){ // type: "hookResult"
         const hookRef = this.#hookRefMap.get(id);
         const hook = hookRef?.deref();
         const handlerMap = this.#callableHandlerMap.get(hook);
@@ -525,7 +559,7 @@ export default class RemoteRegistry {
         handlerMap.delete(callId);
         const {resolve, reject} = this.#promiseResolversWeakMap.get(promise);
         this.#promiseResolversWeakMap.delete(promise);
-        (status === "fulfilled" ? resolve : reject)(this.#decode(value));
+        (status === "fulfilled" ? resolve : reject)(this.#decode(value, mapping));
     }
 
     #unregisterHook(id){
@@ -550,8 +584,23 @@ class EncodeContext {
     #successTasks = new Set();
     #errorTasks = new Set();
     #beforeSendTasks = new Set();
+    #hookMode
 
+    /** @param hookMode {HookMode} */
+    constructor(hookMode) {
+        this.#hookMode = hookMode;
+    }
 
+    /**
+     * @param fn {Function}
+     * @returns {mapping:"link"|"json"|"process", responseMapping:"link"|"json"|"process"|"ignore"}
+     */
+    getHookMode(fn){
+        const mode = this.#hookMode instanceof Function ? (this.#hookMode(fn) ?? {}) : (this.#hookMode ?? {});
+        mode.mapping = mode.mapping || "link";
+        mode.responseMapping = mode.responseMapping || "link";
+        return mode;
+    }
 
     onBeforeSend(task){
         this.#beforeSendTasks.add(task);
@@ -582,7 +631,7 @@ class EncodeContext {
         return {type: "link", value: id}
     }
 
-    prepareSend(parsedData){
+    prepareSend(){
         this.status = "send"
         for (let task of this.#beforeSendTasks) task();
     }
