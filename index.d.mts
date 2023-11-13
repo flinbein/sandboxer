@@ -41,7 +41,7 @@ declare class ModuleSandbox<const T extends string> {
     
     receive(message: any): void;
     
-    static create<T extends string>(desc: {[KEY in T]: ModulesDescription}, config?: ModulesConfig): ModuleSandbox<T>
+    static create<T extends string>(desc: {[KEY in T]: ModulesDescription}, config?: Partial<ModulesConfig>): ModuleSandbox<T>
 }
 
 interface InvokeParams {

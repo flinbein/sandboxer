@@ -82,7 +82,7 @@ export default class ModuleSandbox extends EventEmitter {
      * @returns {Promise<ModuleSandbox>}
      */
     static async create(moduleDescriptions, config = {}){
-        const conf = {...config, ...baseConfig};
+        const conf = {...baseConfig, ...config};
         const key = crypto.getRandomValues(Buffer.alloc(32)).toString('hex');
         const execArgv = [
             `--allow-fs-read=${path.join(dir, "isolated", "*")}`,
