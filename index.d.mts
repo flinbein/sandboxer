@@ -50,6 +50,7 @@ interface InvokeParams {
     hookMode?: ParamOrCalculated<{
         mapping?: "json"|"process"|"link",
         responseMapping?: "json"|"process"|"link"|"ignore"
+        noThis?: boolean
     }, [Function|Iterable<any>]>
 }
 
