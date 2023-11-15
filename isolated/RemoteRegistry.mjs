@@ -1,15 +1,23 @@
+import RemotePromiseHandler from "./RemotePromiseHandler.mjs";
+
 /**
  * @typedef {
  *  undefined
  *  | {mapping:"link"|"json"|"process", responseMapping:"link"|"json"|"process"|"ignore"}
- *  | ((fn: Function|Iterable) => {mapping:"link"|"json"|"process", responseMapping:"link"|"json"|"process"|"ignore"})
+ *  | ((fn: Function|Iterable) => {
+ *      mapping:"link"|"json"|"process",
+ *      responseMapping: "link"|"json"|"process"|"ignore",
+ *      noThis?: boolean
+ *    })
  * } HookMode
  */
+
 
 export default class RemoteRegistry {
 
     #sendToRemote;
     #remoteCallback;
+    #promiseHandler = new RemotePromiseHandler((...t) => this.#send(...t), (...t) => this.#decode(...t))
     constructor(sendToRemote, remoteCallback) {
         this.#sendToRemote = sendToRemote;
         this.#remoteCallback = remoteCallback;
@@ -107,9 +115,7 @@ export default class RemoteRegistry {
         if (link) return link;
 
         if (data instanceof Promise) {
-            const result = this.#encodePromise(context, data);
-            context.saveLink(data, result);
-            return result;
+            return this.#promiseHandler.encodePromise(context, data, (...a) => this.#encode(...a));
         }
         if (data instanceof Date){
             const time = data.getTime();
@@ -139,88 +145,6 @@ export default class RemoteRegistry {
         return result;
     }
 
-    /**
-     * @param context {EncodeContext}
-     * @param promise {Promise}
-     * @returns {{type: "promise", value?: number, status: "fulfilled"|"rejected"|"pending", result: any}}
-     */
-    #encodePromise(context, promise){
-        let id = this.#hookIdMap.get(promise);
-        if (id != null) return {type: "promise", status:"pending", value: id};
-
-        /** @type {{type: "promise", value?: any, status?: "fulfilled"|"rejected"|"pending"}} */
-        const data = {type: "promise"};
-        const weakResult = new WeakRef(data);
-
-        const resolve = (status) => (value) => {
-            const res = weakResult.deref();
-            if (!res) return;
-            if ("value" in res) return; // late
-            res.status = status;
-            res.value = this.#encode(context, value);
-        }
-
-        promise.then(resolve("fulfilled"), resolve("rejected"));
-
-        context.onBeforeSend(() => {
-            if (data.status) return;
-            id = this.#getNextHookId();
-            data.value = id;
-            data.status = "pending";
-            this.#promiseClearRegistry.register(promise, id, promise);
-            this.#hookIdMap.set(promise, id);
-        })
-        const onPromiseDone = (status) => (value) => {
-            void this.#sendPromiseUpdate(id, status, value);
-            this.#promiseClearRegistry.unregister(promise);
-            this.#hookIdMap.delete(promise);
-        }
-
-        context.onSuccess(() => {
-            if (data.status !== "pending") return;
-            promise.then(onPromiseDone("fulfilled"), onPromiseDone("rejected"));
-        })
-        context.onError(() => {
-            this.#hookIdMap.delete(promise);
-        })
-
-        return data;
-    }
-
-
-    // TODO CHECK WHY NO LINK
-    #promiseClearRegistry = new FinalizationRegistry((id) => {
-        void this.#sendPromiseUpdate(id, "clear");
-    })
-
-    async #sendPromiseUpdate(id, status, value, mapping, responseMapping){
-        if (status === "clear") {
-            return this.#send(encode => ({
-                type: "promiseUpdate",
-                data: {id, status}
-            }));
-        }
-        try {
-            return await this.#send(encode => ({
-                type: "promiseUpdate",
-                data: {id, status, value: encode(value), mapping, responseMapping}
-            }), mapping, {mapping, responseMapping});
-        } catch (error) {
-            try {
-                return await this.#send(encode => ({
-                    type: "promiseUpdate",
-                    data: {id, status: "rejected", value: encode(error), mapping, responseMapping}
-                }), mapping, {mapping, responseMapping});
-            } catch {
-                return await this.#send((encode) => ({
-                    type: "promiseUpdate",
-                    data: {id, status: "rejected", value: encode("error on serialize promise data"), mapping, responseMapping}
-                }), mapping, {mapping, responseMapping});
-            }
-        }
-
-    }
-
     /** @type {Map<number, Function|Iterator>} */
     #callableRegistryMap = new Map()
     #encodeCallable(context, callable){
@@ -232,7 +156,7 @@ export default class RemoteRegistry {
             this.#hookIdMap.set(callable, value);
         }
         this.#callableRegistryMap.set(value, callable);
-        const {mapping, responseMapping} = context.getHookMode(callable);
+        const {mapping, responseMapping, noThis} = context.getHookMode(callable);
         context.onError(() => {
             this.#callableRegistryMap.delete(value);
         })
@@ -241,6 +165,7 @@ export default class RemoteRegistry {
             value,
             mapping,
             responseMapping,
+            noThis,
             length: callable.length,
             name: callable.name
         }
@@ -300,9 +225,7 @@ export default class RemoteRegistry {
     // ===== Receive JSON =====
 
     receive = ({type, data}) => {
-        if (type === "promiseUpdate") {
-            return void this.#onPromiseUpdate(data);
-        }
+        if (this.#promiseHandler.receive({type, data})) return;
         if (type === "hook") {
             return void this.#onHookCall(data);
         }
@@ -379,6 +302,7 @@ export default class RemoteRegistry {
     #decodeStep(data, decodeContext, onSuccess){
         if (data === null) return onSuccess(data);
         if (typeof data !== "object") return onSuccess(data);
+        if (this.#promiseHandler.decodePart(data, decodeContext, onSuccess, (...a) => this.#decodeStep(...a))) return;
         if (data.type === "link") return decodeContext.resolveLink(data.value, onSuccess);
         if (data.type === "value") return onSuccess(decodeContext.registerLink(data.id, data.value));
         if (data.type === "array") {
@@ -395,11 +319,6 @@ export default class RemoteRegistry {
             for (const [key, item] of data.value) {
                 this.#decodeStep(item, decodeContext, (itemResult) => result[key] = itemResult);
             }
-            return onSuccess(result);
-        }
-        if (data.type === "promise") {
-            const result = this.#decodePromise(data, decodeContext);
-            decodeContext.registerLink(data.id, result);
             return onSuccess(result);
         }
         if (data.type === "fn") {
@@ -427,23 +346,6 @@ export default class RemoteRegistry {
     #hookRefMap = new Map()
     /** @type {WeakMap<Promise, {resolve: (x)=>void, reject: (x)=>void}>} */
     #promiseResolversWeakMap = new WeakMap()
-    #decodePromise({value, status}, decodeContext){
-        if (status === "fulfilled" || status === "rejected") {
-            return new Promise((resolve, reject) => {
-                this.#decodeStep(value, decodeContext, status === "fulfilled" ? resolve : reject)
-            })
-        }
-        const promiseRef = this.#hookRefMap.get(value);
-        let promise = promiseRef?.deref();
-        if (promise) return promise;
-
-        promise = this.#createPromiseWithResolvers();
-        this.#hookRefMap.set(value, new WeakRef(promise))
-        this.#hookIdMap.set(promise, value);
-        this.#callableClearRegistry.register(promise, value, promise); // ?????
-        return promise;
-    }
-
     #createPromiseWithResolvers(){
         let resolver = {};
         const promise = new Promise((resolve, reject) => resolver = {resolve, reject});
@@ -451,33 +353,19 @@ export default class RemoteRegistry {
         return promise;
     }
 
-    #onPromiseUpdate({id, status, value, mapping}){
-        const promiseRef = this.#hookRefMap.get(id);
-        this.#hookRefMap.delete(id);
-        if (status === "clear") return;
-        if (!promiseRef) return;
-        const promise = promiseRef.deref();
-        if (!promise) return;
-        const {resolve, reject} = this.#promiseResolversWeakMap.get(promise);
-        this.#promiseResolversWeakMap.delete(promise);
-        this.#callableClearRegistry.unregister(promise); // ?????
-        const decodedValue = this.#decode(value, mapping);
-        (status === "fulfilled" ? resolve : reject)(decodedValue);
-    }
-
-
     /** @type {WeakMap<Function|AsyncIterable, Map<number, Promise>>} */
     #callableHandlerMap = new WeakMap();
     /** @type {WeakMap<Function|AsyncIterable, () => number>} */
     #callableCounterMap = new WeakMap();
-    #decodeFunction({value, name = "", mapping = "link", responseMapping = "link"}){
+    #decodeFunction({value, name = "", mapping = "link", responseMapping = "link", noThis = false}){
         const registry = this;
         const funRef = this.#hookRefMap.get(value);
         let fun = funRef?.deref();
         if (fun) return fun;
         fun = ({
             async [name](...args){
-                return registry.#callHook(fun, "call", this, args, mapping, responseMapping);
+                const thisArg = noThis ? undefined : this;
+                return registry.#callHook(fun, "call", thisArg, args, mapping, responseMapping);
             }
         })[name];
         this.#callableCounterMap.set(fun, createCounter(0));
@@ -598,6 +486,7 @@ class EncodeContext {
     getHookMode(fn){
         const mode = this.#hookMode instanceof Function ? (this.#hookMode(fn) ?? {}) : (this.#hookMode ?? {});
         mode.mapping = mode.mapping || "link";
+        mode.noThis = mode.noThis || false;
         mode.responseMapping = mode.responseMapping || "link";
         return mode;
     }

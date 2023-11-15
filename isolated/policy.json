@@ -10,7 +10,12 @@
 		},
 		"./RemoteRegistry.mjs": {
 			"integrity": true,
-			"dependencies": {}
+			"dependencies": {
+				"./RemotePromiseHandler.mjs": true
+			}
+		},
+		"./RemotePromiseHandler.mjs": {
+			"integrity": true
 		}
 	}
 }

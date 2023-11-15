@@ -10,14 +10,13 @@ const sandbox = await ModuleSandbox.create({
                 return 0;
             }
             export const getNthUser = (index) => getUsers()[index];
-            export function handleMessage(message, fn, pr) {
-                console.log("Message from", this.name, message);
-                console.dir(getUsers());
-                setTimeout(() => {
-                   console.log("pr=", pr);
-                }, 15000);
-                 fn(102).then(v => console.log("await fn(102) returns:",v));
-                return this.name + " SAID: "+message;
+            
+            export async function handleMessage(message, ctr) {
+                console.log("REC-CTR", ctr);
+                await ctr.nextValue();
+                await ctr.nextValue();
+                const e = await ctr.nextValue();
+                return String(e);
             }
         `,
         links: ['main']
@@ -46,16 +45,20 @@ sandbox.on("exit", () => {
     console.log("==================== EXIT")
 })
 
+class Counter{
+    x = 0;
+    nextValue = () => {return this.x++};
+}
+
 try {
     console.log("====== START RESPONSE");
-    const a = (x) => {
-        console.log("called-A-with-param", x);
-        return x + 1;
-    };
-    const b = new Promise(r => 0);
-    const mappingParams = {mapping: "link", responseMapping: "json", hookMode: ({mapping: "json", responseMapping: "ignore"})}
-    const result = await sandbox.invoke("room","handleMessage",{name: "DPOHVAR"}, ["Hello", a, b], mappingParams);
+    const c = new Counter();
+    c.nextValue();
+    c.nextValue();
+    const mappingParams = {mapping: "link", responseMapping: "link", hookMode: ({mapping: "link", responseMapping: "link", noThis: true})}
+    const result = await sandbox.invoke("room","handleMessage",{name: "DPOHVAR"}, ["Hello", c], mappingParams);
     console.log("====== DONE RESPONSE", result);
+    console.log("====== AND NEXT", c.nextValue());
 } catch (e) {
     console.log("====== ERROR RESPONSE", e);
 }
