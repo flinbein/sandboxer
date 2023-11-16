@@ -26,40 +26,41 @@ const baseConfig = {
     maxMemoryUsage: {rss: 1000000000}
 };
 
-export default class ModuleSandbox extends EventEmitter {
+export default class ModuleSandbox {
 
-    /** @type {string|null} */
-    #exitCode = null;
+    /** @type {{reason: string, value: *, expected: *}|null} */
+    #exitReason = null;
     #childProcess = null;
     #invokeCount = Number.MIN_SAFE_INTEGER;
     #remoteRegistry = new RemoteRegistry((data) => {
-        this.emit("data-send", data);
+        this.#emitter.emit("data-send", data);
         this.#childProcess.send(["remote", data]);
     })
+    #emitter = new EventEmitter();
 
     get exitCode(){
-        return this.#exitCode;
+        return this.#exitReason;
     }
 
-    #setExitCode(value){
-        this.emit("exit", value);
-        if (this.#exitCode) return;
-        this.#exitCode = value;
+    /** @param e {{reason: string, value: *, expected: *}} */
+    #setExitReason(e){
+        this.#emitter.emit("exit", e.reason, e.value, e.expected);
+        if (this.#exitReason) return;
+        this.#exitReason = e;
     }
 
     /** @private */
     constructor(childProcess) {
-        super();
         this.#childProcess = childProcess
         this.#childProcess.on("message", ([type, messageData]) => {
             if (type !== "remote") return;
-            this.emit("data-receive", messageData);
+            this.#emitter.emit("data-receive", messageData);
             this.#remoteRegistry.receive(messageData);
         });
     }
 
     kill(){
-        this.#setExitCode({reason: "kill"});
+        this.#setExitReason({reason: "kill"});
         this.#childProcess.kill('SIGKILL');
     }
 
@@ -68,7 +69,7 @@ export default class ModuleSandbox extends EventEmitter {
      * @param method {string}
      * @param thisValue {*}
      * @param args {Array<*>}
-     * @param mapping {"json"|"link"|"process"}
+     * @param params {*}
      * @return {Promise<unknown>}
      */
     invoke(identifier, method, thisValue, args, params){
@@ -98,11 +99,11 @@ export default class ModuleSandbox extends EventEmitter {
 
         const sandbox = new ModuleSandbox(childProcess);
         childProcess.once("exit", () => {
-            sandbox.#setExitCode({reason: "exit", value: childProcess.exitCode, expected: null});
+            sandbox.#setExitReason({reason: "exit", value: childProcess.exitCode, expected: null});
         })
 
         function onKillByResourceMonitor(reason, value, expected){
-            sandbox.#setExitCode(reason, value, expected);
+            sandbox.#setExitReason(reason, value, expected);
         }
 
         await waitForMessageOrKill(childProcess, "processReady", 1000);
@@ -113,6 +114,18 @@ export default class ModuleSandbox extends EventEmitter {
         const errorMessage = await waitForMessageOrKill(childProcess, "createModulesDone", 1000);
         if (errorMessage) throw new Error(String(errorMessage));
         return sandbox;
+    }
+
+    on(...args) {
+        return this.#emitter.on(...args)
+    }
+
+    off(...args) {
+        return this.#emitter.off(...args)
+    }
+
+    once(...args) {
+        return this.#emitter.once(...args)
     }
 }
 

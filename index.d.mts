@@ -21,6 +21,12 @@ export declare interface ModulesDescription {
     evaluate?: boolean|number
 }
 
+interface ModuleSandboxEventTypes {
+    "exit"(reason: string, value: unknown, expected: unknown): void
+    "data-send"(data: unknown): void
+    "data-receive"(data: unknown): void
+}
+
 declare class ModuleSandbox<const T extends string> {
     private constructor(
         send: (message: any) => void,
@@ -40,6 +46,18 @@ declare class ModuleSandbox<const T extends string> {
     ): Promise<unknown>
     
     receive(message: any): void;
+    
+    on<T extends keyof ModuleSandboxEventTypes>(
+        event: T,
+        handler: (...args: Parameters<ModuleSandboxEventTypes[T]>) => void
+    ): this
+    
+    once<T extends keyof ModuleSandboxEventTypes>(
+        event: T,
+        handler: (...args: Parameters<ModuleSandboxEventTypes[T]>) => void
+    ): this
+    
+    off<T extends keyof ModuleSandboxEventTypes>(event: T, handler: (...args: any) => any): this
     
     static create<T extends string>(desc: {[KEY in T]: ModulesDescription}, config?: Partial<ModulesConfig>): ModuleSandbox<T>
 }
