@@ -3,35 +3,24 @@ import ModuleSandbox from "./index.mjs"
 const sandbox = await ModuleSandbox.create({
     room: {
         source: `
-            import { getUsers } from "main";
-            function* listGenerator(limit) {
-                let x = 0;
-                while (x <= limit) yield x++;
-                return 0;
-            }
-            export const getNthUser = (index) => getUsers()[index];
-            
-            export async function handleMessage(message, ctr) {
-                console.log("REC-CTR", ctr);
-                await ctr.nextValue();
-                await ctr.nextValue();
-                const e = await ctr.nextValue();
-                return String(e);
+            const map = new Map();
+            export function getMap(key, val) {
+                map.set(key, val);
+                console.log("---map to return", map);
+                return map;
             }
         `,
         links: ['main']
     },
     main: {
         source: `
-            export * from "main2";
+            export function handleMap(map){
+                console.log("MAP RECEIVED", map);
+                return 1;
+            }
         `,
         links: ['main2']
     },
-    main2: {
-        source: `
-            export const getUsers = () => ["john", "doez"];
-        `
-    }
 });
 sandbox.on("data-send", (data) => {
     console.log(">>>>>>>>>>>>>>>>>>>> SEND")
@@ -55,10 +44,13 @@ try {
     const c = new Counter();
     c.nextValue();
     c.nextValue();
-    const mappingParams = {mapping: "link", responseMapping: "link", hookMode: ({mapping: "link", responseMapping: "link", noThis: true})}
-    const result = await sandbox.invoke("room","handleMessage",{name: "DPOHVAR"}, ["Hello", c], mappingParams);
-    console.log("====== DONE RESPONSE", result);
-    console.log("====== AND NEXT", c.nextValue());
+    const resultRef1 = await sandbox.invoke("room","getMap",undefined, ["a", "b"], {mapping: "link", responseMapping: "ref"});
+    console.log("====== DONE RR1", resultRef1);
+    const resultRef2 = await sandbox.invoke("room","getMap",undefined, ["c", "d"], {mapping: "link", responseMapping: "ref"});
+    console.log("====== DONE RR2", resultRef2);
+    console.log("SAVE REFS", resultRef1 === resultRef2);
+    const r = await sandbox.invoke("main","handleMap",undefined, [resultRef1], {mapping: "link", responseMapping: "json"})
+    console.log("====== AND DONE", r);
 } catch (e) {
     console.log("====== ERROR RESPONSE", e);
 }

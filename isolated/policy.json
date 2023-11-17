@@ -11,10 +11,14 @@
 		"./RemoteRegistry.mjs": {
 			"integrity": true,
 			"dependencies": {
-				"./RemotePromiseHandler.mjs": true
+				"./RemotePromiseHandler.mjs": true,
+				"./RemoteRefHandler.mjs": true
 			}
 		},
 		"./RemotePromiseHandler.mjs": {
+			"integrity": true
+		},
+		"./RemoteRefHandler.mjs": {
 			"integrity": true
 		}
 	}

@@ -1,4 +1,5 @@
 import RemotePromiseHandler from "./RemotePromiseHandler.mjs";
+import RemoteRefHandler from "./RemoteRefHandler.mjs";
 
 /**
  * @typedef {
@@ -12,12 +13,12 @@ import RemotePromiseHandler from "./RemotePromiseHandler.mjs";
  * } HookMode
  */
 
-
 export default class RemoteRegistry {
 
     #sendToRemote;
     #remoteCallback;
     #promiseHandler = new RemotePromiseHandler((...t) => this.#send(...t), (...t) => this.#decode(...t))
+    #refHandler = new RemoteRefHandler((...t) => this.#send(...t))
     constructor(sendToRemote, remoteCallback) {
         this.#sendToRemote = sendToRemote;
         this.#remoteCallback = remoteCallback;
@@ -58,7 +59,7 @@ export default class RemoteRegistry {
 
     /**
      * @param encodeCallback {(encode: (data: any) => any) => any}
-     * @param mapping {"link"|"json"|"process"}
+     * @param mapping {"link"|"json"|"process"|"ref"}
      * @param hookMode {HookMode}
      * @returns {Promise<void>}
      */
@@ -79,6 +80,17 @@ export default class RemoteRegistry {
             return;
         }
         const context = new EncodeContext(hookMode);
+        if (mapping === "ref") {
+            try {
+                const data = encodeCallback(v => this.#refHandler.createRef(v, context));
+                this.#sendToRemote(data);
+                context.end({success: true});
+                return;
+            } catch (error) {
+                context.end({success: false});
+                throw error;
+            }
+        }
         try {
             const data = encodeCallback(this.#encode.bind(this, context));
             await new Promise(r => setImmediate(r)); // resolve promises
@@ -89,6 +101,32 @@ export default class RemoteRegistry {
             context.end({success: false});
             throw error;
         }
+    }
+
+    /**
+     *
+     * @param obj {*}
+     * @param context {EncodeContext}
+     * @returns number|null
+     */
+    #encodeRef(obj, context){
+        if (obj === null) return null;
+        obj = Object(obj); // boxing value
+        const registeredHookId = this.#hookIdMap.get(obj);
+        if (registeredHookId != null) {
+            const hookWeakRef = this.#hookRefMap.get(registeredHookId);
+            const derefData = hookWeakRef.deref();
+            if (obj === derefData) return registeredHookId;
+        }
+        const id = this.#getNextHookId();
+
+        context.onSuccess(() => {
+            this.#hookIdMap.set(obj, id);
+        })
+        context.onError(() => {
+            this.#hookIdMap.delete(obj);
+        })
+        return id;
     }
 
     // ===== Send promise =====
@@ -104,6 +142,7 @@ export default class RemoteRegistry {
     #encode(context, data){
         if (context.status !== "parse") throw new Error("using encode context after prepareSend");
         if (data === undefined) return {type: "undefined"};
+        if (this.#refHandler.isRef(data)) return this.#refHandler.encodeRef(context, data);
         if (typeof data === "number"){
             if (Number.isNaN(data)) return {type: "number", value: "NaN"};
             if (!Number.isFinite(data)) return {type: "number", value: data > 0 ? "I" : "-I"};
@@ -145,8 +184,8 @@ export default class RemoteRegistry {
         return result;
     }
 
-    /** @type {Map<number, Function|Iterator>} */
-    #callableRegistryMap = new Map()
+    /** @type {Map<number, Function|Iterator|*>} */
+    #hookRegistryMap = new Map();
     #encodeCallable(context, callable){
         if (Symbol.iterator in callable) callable = callable[Symbol.iterator]();
         else if (Symbol.asyncIterator in callable) callable = callable[Symbol.asyncIterator]();
@@ -155,10 +194,10 @@ export default class RemoteRegistry {
             value = this.#getNextHookId();
             this.#hookIdMap.set(callable, value);
         }
-        this.#callableRegistryMap.set(value, callable);
+        this.#hookRegistryMap.set(value, callable);
         const {mapping, responseMapping, noThis} = context.getHookMode(callable);
         context.onError(() => {
-            this.#callableRegistryMap.delete(value);
+            this.#hookRegistryMap.delete(value);
         })
         if (typeof callable === "function") return {
             type: "fn",
@@ -174,10 +213,10 @@ export default class RemoteRegistry {
 
     async #onHookCall({id, action, callId, callContext, mapping, responseMapping}){
         if (action === "clear") {
-            this.#callableRegistryMap.delete(id);
+            this.#hookRegistryMap.delete(id);
             return;
         }
-        const callable = this.#callableRegistryMap.get(id);
+        const callable = this.#hookRegistryMap.get(id);
         if (!callable) {
             console.error("Wrong remote callable id", id);
             throw new Error("Wrong remote callable id");
@@ -286,6 +325,7 @@ export default class RemoteRegistry {
     #decode(data, mapping = "link"){
         if (mapping === "process") return data;
         if (mapping === "json") return JSON.parse(data);
+        if (mapping === "ref") return this.#refHandler.resolveRef(data);
         const decodeContext = new DecodeContext();
         let result;
         this.#decodeStep(data, decodeContext, (r) => {result = r});
@@ -302,6 +342,7 @@ export default class RemoteRegistry {
     #decodeStep(data, decodeContext, onSuccess){
         if (data === null) return onSuccess(data);
         if (typeof data !== "object") return onSuccess(data);
+        if (this.#refHandler.decodePart(data, decodeContext, onSuccess)) return;
         if (this.#promiseHandler.decodePart(data, decodeContext, onSuccess, (...a) => this.#decodeStep(...a))) return;
         if (data.type === "link") return decodeContext.resolveLink(data.value, onSuccess);
         if (data.type === "value") return onSuccess(decodeContext.registerLink(data.id, data.value));
@@ -372,7 +413,7 @@ export default class RemoteRegistry {
         this.#callableHandlerMap.set(fun, new Map());
         this.#hookRefMap.set(value, new WeakRef(fun));
         this.#hookIdMap.set(fun, value);
-        this.#callableClearRegistry.register(fun, value);
+        this.#hookClearRegistry.register(fun, value);
         return fun;
     }
 
@@ -409,7 +450,7 @@ export default class RemoteRegistry {
         this.#callableHandlerMap.set(itr, new Map());
         this.#hookRefMap.set(value, new WeakRef(itr));
         this.#hookIdMap.set(itr, value);
-        this.#callableClearRegistry.register(itr, value);
+        this.#hookClearRegistry.register(itr, value);
         return itr;
     }
 
@@ -457,7 +498,7 @@ export default class RemoteRegistry {
         }));
     }
 
-    #callableClearRegistry = new FinalizationRegistry((id) => {
+    #hookClearRegistry = new FinalizationRegistry((id) => {
         this.#unregisterHook(id);
     })
 

@@ -15,7 +15,7 @@ export default class RemotePromiseHandler {
 
     /**
      * @param {EncodeContext} context
-     * @param data {any}
+     * @param data {Promise}
      * @param encode {(context: EncodeContext, val: *) => *}
      * @returns *
      */

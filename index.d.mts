@@ -64,10 +64,10 @@ declare class ModuleSandbox<const T extends string> {
 
 interface InvokeParams {
     mapping?: "json"|"process"|"link",
-    responseMapping?: "json"|"process"|"link"|"ignore"
+    responseMapping?: "json"|"process"|"link"|"ignore"|"ref"
     hookMode?: ParamOrCalculated<{
         mapping?: "json"|"process"|"link",
-        responseMapping?: "json"|"process"|"link"|"ignore"
+        responseMapping?: "json"|"process"|"link"|"ignore"|"ref"
         noThis?: boolean
     }, [Function|Iterable<any>]>
 }

@@ -2,7 +2,7 @@
   "name": "sandboxer",
   "description": "manage modules in sandbox",
   "type": "module",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "node": ">=20.0.0",
   "main": "./index.mjs",
   "module": "./index.mjs",
