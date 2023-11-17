@@ -15,13 +15,22 @@ const sandbox = await ModuleSandbox.create({
     main: {
         source: `
             export function handleMap(map){
-                console.log("MAP RECEIVED", map);
+                console.log("---MAP RECEIVED-log", map);
+                console.info("---MAP RECEIVED-info", map);
+                console.error("---MAP RECEIVED-error", map);
                 return 1;
             }
         `,
         links: ['main2']
     },
+}, {
+    stdout: "pipe",
+    stderr: "pipe",
 });
+const crop = (s) => s.substring(0, s.length - 1);
+sandbox.stdout.on("data", (data) => console.log("[sandbox]:", crop(data.toString())));
+sandbox.stderr.on("data", (data) => console.error("[sandbox]:", crop(data.toString())));
+
 sandbox.on("data-send", (data) => {
     console.log(">>>>>>>>>>>>>>>>>>>> SEND")
     console.dir(data, {depth: 20})

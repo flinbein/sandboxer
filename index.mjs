@@ -18,6 +18,8 @@ const baseConfig = {
     ],
     serialization: "advanced",
     maxOldGenerationSizeMb: 100,
+    stdout: "ignore",
+    stderr: "ignore",
     codeRangeSizeMb: 100,
     stackSizeMb: 40,
     checkAlivePeriod: 1000,
@@ -52,6 +54,9 @@ export default class ModuleSandbox {
     /** @private */
     constructor(childProcess) {
         this.#childProcess = childProcess
+        this.stderr = childProcess.stderr
+        this.stdout = childProcess.stdout
+
         this.#childProcess.on("message", ([type, messageData]) => {
             if (type !== "remote") return;
             this.#emitter.emit("data-receive", messageData);
@@ -94,7 +99,7 @@ export default class ModuleSandbox {
         const childProcess = fork(`${path.join(dir, "isolated", "fork.mjs")}`, {
             execArgv,
             serialization: conf.serialization,
-            // stdio: "ignore"
+            stdio: ["ignore", conf.stdout, conf.stderr, "ipc"]
         });
 
         const sandbox = new ModuleSandbox(childProcess);

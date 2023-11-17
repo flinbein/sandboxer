@@ -1,6 +1,8 @@
 import ArrayBufferView = NodeJS.TypedArray;
 import MemoryUsage = NodeJS.MemoryUsage;
 import CpuUsage = NodeJS.CpuUsage;
+import type { Stream } from "node:stream";
+import type { IOType } from "child_process";
 
 export declare interface ModulesConfig {
     maxYoungGenerationSizeMb: number|null,
@@ -8,6 +10,8 @@ export declare interface ModulesConfig {
     execArgv: string[],
     codeRangeSizeMb: number,
     serialization: "advanced" | "json",
+    stdout: IOType | "ipc" | Stream | number | null | undefined,
+    stderr: IOType | "ipc" | Stream | number | null | undefined,
     stackSizeMb: number,
     checkAlivePeriod: number,
     checkAliveTimeout: number,
