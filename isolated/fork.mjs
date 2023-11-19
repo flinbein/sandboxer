@@ -48,9 +48,8 @@ function createModule(identifier, desc, context, cachedData){
         });
     }
     if (desc.type === "json") {
-        const json = JSON.stringify(desc.data);
         const module = new vm.SyntheticModule(["default"], () => {
-            const ctx = vm.createContext({json}, {codeGeneration: {strings: false}});
+            const ctx = vm.createContext({json: String(desc.source)}, {codeGeneration: {strings: false}});
             module.setExport("default", vm.runInContext("JSON.parse(json)", ctx, {cachedData}));
         }, { identifier, context});
         return module;

@@ -15,7 +15,7 @@ const sandbox = await ModuleSandbox.create({
     },
     innerData: {
         type: "json",
-        data: {x: 14, y: 3, z: 1}
+        source: JSON.stringify({x: 14, y: 3, z: 1})
     },
     main: {
         type: "js",

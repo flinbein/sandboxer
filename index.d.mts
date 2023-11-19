@@ -26,7 +26,7 @@ export declare interface JsModuleDescription {
 }
 export declare interface JSONModuleDescription {
     type: "json"
-    data: any
+    source: string
 }
 export declare type ModuleDescription = JsModuleDescription | JSONModuleDescription
 
