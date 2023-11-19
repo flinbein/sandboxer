@@ -5,6 +5,7 @@
 			"integrity": true,
 			"dependencies": {
 				"node:vm": true,
+				"node:url": true,
 				"./RemoteRegistry.mjs": true
 			}
 		},

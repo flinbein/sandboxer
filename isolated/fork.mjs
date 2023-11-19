@@ -1,4 +1,5 @@
 import vm from 'node:vm';
+import url from 'node:url';
 import RemoteRegistry from './RemoteRegistry.mjs';
 
 const processSend = process.send.bind(process);
@@ -6,6 +7,7 @@ const processOn = process.on.bind(process);
 const processOff = process.off.bind(process);
 const processCpuUsage = process.cpuUsage.bind(process);
 const processMemoryUsage = process.memoryUsage.bind(process);
+const urlResolve = url.resolve.bind(url);
 
 function handleCommand(conditionMapper, callback, once = false){
     function handler(msg){
@@ -76,21 +78,38 @@ async function initUserModules(params){
         moduleMap.set(identifier, module);
     }
 
-    await Promise.all([...moduleMap.values()].map(module => module.link(link)));
+    // await Promise.all([...moduleMap.values()].map(module => module.link(link)));
 
-    function link(specifier, module, extra){
+    function link(specifier, module, {attributes}){
+        const resolvedSpecifier = urlResolve(module.identifier, specifier);
         const moduleDescription = moduleDescriptions[module.identifier];
         const links = moduleDescription.links;
-        if (links.includes(specifier)) return moduleMap.get(specifier);
-        return null;
+        console.log("LINK RESOLVE-EXTRA", specifier);
+        if (links.includes(resolvedSpecifier)) {
+            const resolvedModule = moduleMap.get(resolvedSpecifier);
+            if (resolvedModule) {
+                if (attributes && attributes.type) {
+                    const resolvedModuleDesc = moduleDescriptions[resolvedModule.identifier]
+                    if (!resolvedModuleDesc) throw new Error(`module "${resolvedModule.identifier}" has unknown type`);
+                    if (attributes.type !== resolvedModuleDesc.type) {
+                        throw new Error(`module type mismatch: "${resolvedSpecifier}" (${resolvedModuleDesc.type}): lookup "${specifier}" as ${attributes.type} from "${module.identifier}"`);
+                    }
+                }
+                return resolvedModule;
+            }
+            throw new Error(`module not found: "${resolvedSpecifier}": lookup "${specifier}" from "${module.identifier}"`);
+        }
+        throw new Error(`module "${module.identifier}" has no access to "${resolvedSpecifier}`);
     }
 
     await Promise.all([...moduleMap.values()].map(module => {
         const desc = moduleDescriptions[module.identifier];
         if (desc.type === "js" && desc.evaluate) {
-            module.evaluate({
-                timeout: typeof desc.evaluate === "number" ? desc.evaluate : undefined,
-                breakOnSigint: true
+            return module.link(link).then(() => {
+                return module.evaluate({
+                    timeout: typeof desc.evaluate === "number" ? desc.evaluate : undefined,
+                    breakOnSigint: true
+                });
             });
         }
     }));

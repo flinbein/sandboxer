@@ -1,44 +1,36 @@
 import ModuleSandbox from "./index.mjs"
 
 const sandbox = await ModuleSandbox.create({
-    room: {
+    "/index.js": {
         type: "js",
         source: `
-            const map = new Map();
-            export function getMap(key, val) {
-                map.set(key, val);
-                console.log("---map to return", map);
-                return map;
-            }
+            import { x } from "./inner/module.js";
+            console.log("[index.js] x", x);
+            export function getX(){return x}
         `,
-        links: ['main']
+        links: ['/inner/module.js'],
+        evaluate: true
     },
-    innerData: {
+    "/inner/module.js": {
+        type: "js",
+        source: `
+            import data from "../data.json" assert { type: 'json' };
+            export const x = data;
+        `,
+        links: ['/data.json']
+    },
+    "/data.json": {
         type: "json",
-        source: JSON.stringify({x: 14, y: 3, z: 1})
-    },
-    main: {
-        type: "js",
-        source: `
-            import data from "innerData";
-        
-            export function handleMap(map){
-                console.log("---MAP RECEIVED-log", map, data, globalThis.fetch);
-                console.info("---MAP RECEIVED-info", map, data);
-                console.error("---MAP RECEIVED-error", map, data);
-                return data;
-            }
-        `,
-        links: ['main2', 'innerData']
+        source: `{"foo": "bar"}`
     },
 }, {
-    stdout: "pipe",
-    stderr: "pipe",
+    stdout: 1,
+    stderr: 2,
     contextHooks: ["console"]
 });
-const crop = (s) => s.substring(0, s.length - 1);
-sandbox.stdout.on("data", (data) => console.log("[sandbox]:", crop(data.toString())));
-sandbox.stderr.on("data", (data) => console.error("[sandbox]:", crop(data.toString())));
+// const crop = (s) => s.substring(0, s.length - 1);
+// sandbox.stdout.on("data", (data) => console.log("[sandbox]:", crop(data.toString())));
+// sandbox.stderr.on("data", (data) => console.error("[sandbox]:", crop(data.toString())));
 
 sandbox.on("data-send", (data) => {
     // console.log(">>>>>>>>>>>>>>>>>>>> SEND")
@@ -52,23 +44,10 @@ sandbox.on("exit", () => {
     console.log("==================== EXIT EVENT")
 })
 
-class Counter{
-    x = 0;
-    nextValue = () => {return this.x++};
-}
-
 try {
     console.log("====== START RESPONSE");
-    const c = new Counter();
-    c.nextValue();
-    c.nextValue();
-    const resultRef1 = await sandbox.invoke("room","getMap",undefined, ["a", "b"], {mapping: "link", responseMapping: "ref"});
-    console.log("====== DONE RR1", resultRef1);
-    const resultRef2 = await sandbox.invoke("room","getMap",undefined, ["c", "d"], {mapping: "link", responseMapping: "ref"});
-    console.log("====== DONE RR2", resultRef2);
-    console.log("SAVE REFS", resultRef1 === resultRef2);
-    const r = await sandbox.invoke("main","handleMap",undefined, [resultRef1], {mapping: "link", responseMapping: "json"})
-    console.log("====== AND DONE", r);
+    const resultRef1 = await sandbox.invoke("/index.js","getX",undefined, [], {mapping: "link", responseMapping: "link"});
+    console.log("====== AND DONE", resultRef1);
 } catch (e) {
     console.log("====== ERROR RESPONSE", e);
 }

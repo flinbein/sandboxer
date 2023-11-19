@@ -1,4 +1,3 @@
-import ArrayBufferView = NodeJS.TypedArray;
 import MemoryUsage = NodeJS.MemoryUsage;
 import CpuUsage = NodeJS.CpuUsage;
 import type { Stream } from "node:stream";
