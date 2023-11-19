@@ -39,17 +39,35 @@ async function onInitProcess(params){
 }
 
 const moduleMap = new Map();
+
+function createModule(identifier, desc, context, cachedData){
+    if (desc.type === "js") {
+        return new vm.SourceTextModule(desc.source, {
+            identifier,
+            context,
+        });
+    }
+    if (desc.type === "json") {
+        const json = JSON.stringify(desc.data);
+        const module = new vm.SyntheticModule(["default"], () => {
+            const ctx = vm.createContext({json}, {codeGeneration: {strings: false}});
+            module.setExport("default", vm.runInContext("JSON.parse(json)", ctx, {cachedData}));
+        }, { identifier, context});
+        return module;
+    }
+    throw new Error("unknown module type");
+}
 async function initUserModules(params){
     const { moduleDescriptions } = params;
+    const context = vm.createContext({}, {
+        codeGeneration: { strings: false, wasm: true}
+    });
 
-    for(const name in moduleDescriptions) {
-        const moduleDescription = moduleDescriptions[name];
+    for(const identifier in moduleDescriptions) {
+        const moduleDescription = moduleDescriptions[identifier];
 
-        const module = new vm.SourceTextModule(moduleDescription.source, {
-            identifier: name,
-            cachedData: params?.cachedData ?? undefined,
-        });
-        moduleMap.set(name, module);
+        const module = createModule(identifier, moduleDescription, context);
+        moduleMap.set(identifier, module);
     }
 
     await Promise.all([...moduleMap.values()].map(module => module.link(link)));
@@ -62,10 +80,10 @@ async function initUserModules(params){
     }
 
     await Promise.all([...moduleMap.values()].map(module => {
-        const moduleDescription = moduleDescriptions[module.identifier];
-        if (moduleDescription.evaluate) {
+        const desc = moduleDescriptions[module.identifier];
+        if (desc.type === "js" && desc.evaluate) {
             module.evaluate({
-                timeout: typeof moduleDescription.evaluate === "number" ? moduleDescription.evaluate : undefined,
+                timeout: typeof desc.evaluate === "number" ? desc.evaluate : undefined,
                 breakOnSigint: true
             });
         }

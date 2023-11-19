@@ -324,7 +324,10 @@ export default class RemoteRegistry {
 
     #decode(data, mapping = "link"){
         if (mapping === "process") return data;
-        if (mapping === "json") return JSON.parse(data);
+        if (mapping === "json") {
+            if (data == null) return data;
+            return JSON.parse(data);
+        }
         if (mapping === "ref") return this.#refHandler.resolveRef(data);
         const decodeContext = new DecodeContext();
         let result;

@@ -12,7 +12,6 @@ const baseConfig = {
         `--experimental-vm-modules`,
         `--disallow-code-generation-from-strings`,
         `--disable-proto=delete`,
-        `--no-experimental-fetch`,
         `--no-warnings`,
         `--experimental-wasm-modules`
     ],
@@ -33,7 +32,6 @@ export default class ModuleSandbox {
     /** @type {{reason: string, value: *, expected: *}|null} */
     #exitReason = null;
     #childProcess = null;
-    #invokeCount = Number.MIN_SAFE_INTEGER;
     #remoteRegistry = new RemoteRegistry((data) => {
         this.#emitter.emit("data-send", data);
         this.#childProcess.send(["remote", data]);
@@ -46,8 +44,8 @@ export default class ModuleSandbox {
 
     /** @param e {{reason: string, value: *, expected: *}} */
     #setExitReason(e){
-        this.#emitter.emit("exit", e.reason, e.value, e.expected);
         if (this.#exitReason) return;
+        this.#emitter.emit("exit", e.reason, e.value, e.expected);
         this.#exitReason = e;
     }
 

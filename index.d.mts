@@ -18,12 +18,17 @@ export declare interface ModulesConfig {
     maxCpuUsage: Partial<CpuUsage>|null,
     maxMemoryUsage: Partial<MemoryUsage>|null,
 }
-export declare interface ModulesDescription {
+export declare interface JsModuleDescription {
     source: string,
+    type: "js"
     links?: string[]
-    cachedData?: Buffer | ArrayBufferView,
     evaluate?: boolean|number
 }
+export declare interface JSONModuleDescription {
+    type: "json"
+    data: any
+}
+export declare type ModuleDescription = JsModuleDescription | JSONModuleDescription
 
 interface ModuleSandboxEventTypes {
     "exit"(reason: string, value: unknown, expected: unknown): void
@@ -63,7 +68,7 @@ declare class ModuleSandbox<const T extends string> {
     
     off<T extends keyof ModuleSandboxEventTypes>(event: T, handler: (...args: any) => any): this
     
-    static create<T extends string>(desc: {[KEY in T]: ModulesDescription}, config?: Partial<ModulesConfig>): ModuleSandbox<T>
+    static create<T extends string>(desc: {[KEY in T]: ModuleDescription}, config?: Partial<ModulesConfig>): ModuleSandbox<T>
 }
 
 interface InvokeParams {

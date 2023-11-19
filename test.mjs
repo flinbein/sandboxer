@@ -2,6 +2,7 @@ import ModuleSandbox from "./index.mjs"
 
 const sandbox = await ModuleSandbox.create({
     room: {
+        type: "js",
         source: `
             const map = new Map();
             export function getMap(key, val) {
@@ -12,16 +13,23 @@ const sandbox = await ModuleSandbox.create({
         `,
         links: ['main']
     },
+    innerData: {
+        type: "json",
+        data: {x: 14, y: 3, z: 1}
+    },
     main: {
+        type: "js",
         source: `
+            import data from "innerData";
+        
             export function handleMap(map){
-                console.log("---MAP RECEIVED-log", map);
-                console.info("---MAP RECEIVED-info", map);
-                console.error("---MAP RECEIVED-error", map);
-                return 1;
+                console.log("---MAP RECEIVED-log", map, data, globalThis.fetch);
+                console.info("---MAP RECEIVED-info", map, data);
+                console.error("---MAP RECEIVED-error", map, data);
+                return data;
             }
         `,
-        links: ['main2']
+        links: ['main2', 'innerData']
     },
 }, {
     stdout: "pipe",
@@ -32,15 +40,15 @@ sandbox.stdout.on("data", (data) => console.log("[sandbox]:", crop(data.toString
 sandbox.stderr.on("data", (data) => console.error("[sandbox]:", crop(data.toString())));
 
 sandbox.on("data-send", (data) => {
-    console.log(">>>>>>>>>>>>>>>>>>>> SEND")
-    console.dir(data, {depth: 20})
+    // console.log(">>>>>>>>>>>>>>>>>>>> SEND")
+    // console.dir(data, {depth: 20})
 })
 sandbox.on("data-receive", (data) => {
-    console.log("<<<<<<<<<<<<<<<<<<<< RECEIVE")
-    console.dir(data, {depth: 20})
+    // console.log("<<<<<<<<<<<<<<<<<<<< RECEIVE")
+    // console.dir(data, {depth: 20})
 })
 sandbox.on("exit", () => {
-    console.log("==================== EXIT")
+    console.log("==================== EXIT EVENT")
 })
 
 class Counter{
