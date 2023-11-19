@@ -9,6 +9,7 @@ export declare interface ModulesConfig {
     maxOldGenerationSizeMb: number|null,
     execArgv: string[],
     codeRangeSizeMb: number,
+    contextHooks: string[],
     serialization: "advanced" | "json",
     stdout: IOType | "ipc" | Stream | number | null | undefined,
     stderr: IOType | "ipc" | Stream | number | null | undefined,

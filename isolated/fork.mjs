@@ -57,8 +57,15 @@ function createModule(identifier, desc, context, cachedData){
     throw new Error("unknown module type");
 }
 async function initUserModules(params){
-    const { moduleDescriptions } = params;
-    const context = vm.createContext({}, {
+    const { moduleDescriptions, contextHooks } = params;
+
+    const contextObject = Object.create(null);
+    for (const ctxHook of contextHooks) {
+        const v = globalThis[ctxHook];
+        if (v === undefined) continue;
+        contextObject[ctxHook] = v;
+    }
+    const context = vm.createContext(contextObject, {
         codeGeneration: { strings: false, wasm: true}
     });
 

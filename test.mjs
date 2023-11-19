@@ -34,6 +34,7 @@ const sandbox = await ModuleSandbox.create({
 }, {
     stdout: "pipe",
     stderr: "pipe",
+    contextHooks: ["console"]
 });
 const crop = (s) => s.substring(0, s.length - 1);
 sandbox.stdout.on("data", (data) => console.log("[sandbox]:", crop(data.toString())));

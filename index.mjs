@@ -19,6 +19,7 @@ const baseConfig = {
     maxOldGenerationSizeMb: 100,
     stdout: "ignore",
     stderr: "ignore",
+    contextHooks: ["console"],
     codeRangeSizeMb: 100,
     stackSizeMb: 40,
     checkAlivePeriod: 1000,
