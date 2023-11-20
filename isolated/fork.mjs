@@ -41,6 +41,7 @@ async function onInitProcess(params){
 }
 
 const moduleMap = new Map();
+let moduleDescriptions = null;
 
 function createModule(identifier, desc, context, cachedData){
     if (desc.type === "js") {
@@ -59,7 +60,8 @@ function createModule(identifier, desc, context, cachedData){
     throw new Error("unknown module type");
 }
 async function initUserModules(params){
-    const { moduleDescriptions, contextHooks } = params;
+    moduleDescriptions = params.moduleDescriptions;
+    const { contextHooks } = params;
 
     const contextObject = Object.create(null);
     for (const ctxHook of contextHooks) {
@@ -80,27 +82,6 @@ async function initUserModules(params){
 
     // await Promise.all([...moduleMap.values()].map(module => module.link(link)));
 
-    function link(specifier, module, {attributes}){
-        const resolvedSpecifier = urlResolve(module.identifier, specifier);
-        const moduleDescription = moduleDescriptions[module.identifier];
-        const links = moduleDescription.links;
-        console.log("LINK RESOLVE-EXTRA", specifier);
-        if (links.includes(resolvedSpecifier)) {
-            const resolvedModule = moduleMap.get(resolvedSpecifier);
-            if (resolvedModule) {
-                if (attributes && attributes.type) {
-                    const resolvedModuleDesc = moduleDescriptions[resolvedModule.identifier]
-                    if (!resolvedModuleDesc) throw new Error(`module "${resolvedModule.identifier}" has unknown type`);
-                    if (attributes.type !== resolvedModuleDesc.type) {
-                        throw new Error(`module type mismatch: "${resolvedSpecifier}" (${resolvedModuleDesc.type}): lookup "${specifier}" as ${attributes.type} from "${module.identifier}"`);
-                    }
-                }
-                return resolvedModule;
-            }
-            throw new Error(`module not found: "${resolvedSpecifier}": lookup "${specifier}" from "${module.identifier}"`);
-        }
-        throw new Error(`module "${module.identifier}" has no access to "${resolvedSpecifier}`);
-    }
 
     await Promise.all([...moduleMap.values()].map(module => {
         const desc = moduleDescriptions[module.identifier];
@@ -115,6 +96,40 @@ async function initUserModules(params){
     }));
 }
 
+function link(specifier, module, {attributes}){
+    const resolvedSpecifier = resolveModulePath(specifier, module.identifier);
+    const moduleDescription = moduleDescriptions[module.identifier];
+    const links = moduleDescription.links;
+    if (links.includes(resolvedSpecifier)) {
+        const resolvedModule = moduleMap.get(resolvedSpecifier);
+        if (resolvedModule) {
+            if (attributes && attributes.type) {
+                const resolvedModuleDesc = moduleDescriptions[resolvedModule.identifier]
+                if (!resolvedModuleDesc) throw new Error(`module "${resolvedModule.identifier}" has unknown type`);
+                if (attributes.type !== resolvedModuleDesc.type) {
+                    throw new Error(`module type mismatch: "${resolvedSpecifier}" (${resolvedModuleDesc.type}): lookup "${specifier}" as ${attributes.type} from "${module.identifier}"`);
+                }
+            }
+            return resolvedModule;
+        }
+        throw new Error(`module not found: "${resolvedSpecifier}": lookup "${specifier}" from "${module.identifier}"`);
+    }
+    throw new Error(`module "${module.identifier}" has no access to "${resolvedSpecifier}`);
+}
+
+const defaultExtensions = ["js", "mjs", "json"]
+function resolveModulePath(modulePath, importFrom) {
+    const resolvedName = urlResolve(importFrom, modulePath);
+    if (moduleMap.has(resolvedName)) return resolvedName;
+    if (String(resolvedName).match(/\.[^/?]$/g)) return resolvedName;
+    for (let ext of defaultExtensions) {
+        const tryName = resolvedName + "." + ext;
+        if (moduleMap.has(tryName)) return tryName;
+    }
+    return resolvedName;
+}
+
+
 handleCommand(checkSecondMessageArg("init"), onInitProcess, true);
 
 async function onInitModules(data){
@@ -127,6 +142,7 @@ async function onInitModules(data){
     }
 }
 
+const moduleTaskPromiseMap = new WeakMap();
 const remoteRegistry = new RemoteRegistry(
     (data) => {
         processSend(["remote", data])
@@ -134,7 +150,21 @@ const remoteRegistry = new RemoteRegistry(
     async (identifier, method, thisValue, args) => {
         const module = moduleMap.get(identifier);
         if (!module) throw new Error("Can not cal method of unknown module: "+identifier);
-        if (module.status !== "evaluated") await module.evaluate({breakOnSigint: true});
+        if (module.status === "unlinked") {
+            const linkTask = module.link(link);
+            moduleTaskPromiseMap.set(module, linkTask);
+        }
+        if (module.status === "linking") {
+            await moduleTaskPromiseMap.get(module);
+        }
+        if (module.status === "linked") {
+            const evalTask = module.evaluate({breakOnSigint: true});
+            moduleTaskPromiseMap.set(module, evalTask);
+        }
+        if (module.status === "evaluating") {
+            await moduleTaskPromiseMap.get(module)
+        }
+        if (module.status !== "evaluated") throw new Error(`error in module ${identifier}`);
         const moduleFun = module.namespace[method];
         if (typeof moduleFun !== "function") throw new Error(`exported method ${identifier}.${method} is not a function`);
         return () => moduleFun.apply(thisValue, args);

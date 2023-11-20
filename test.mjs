@@ -4,12 +4,12 @@ const sandbox = await ModuleSandbox.create({
     "/index.js": {
         type: "js",
         source: `
-            import { x } from "./inner/module.js";
+            import { x } from "./inner/module";
             console.log("[index.js] x", x);
             export function getX(){return x}
         `,
         links: ['/inner/module.js'],
-        evaluate: true
+        // evaluate: true
     },
     "/inner/module.js": {
         type: "js",
@@ -46,6 +46,7 @@ sandbox.on("exit", () => {
 
 try {
     console.log("====== START RESPONSE");
+    sandbox.invoke("/index.js","getX",undefined, [], {mapping: "link", responseMapping: "link"});
     const resultRef1 = await sandbox.invoke("/index.js","getX",undefined, [], {mapping: "link", responseMapping: "link"});
     console.log("====== AND DONE", resultRef1);
 } catch (e) {
