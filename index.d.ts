@@ -2,6 +2,7 @@ import MemoryUsage = NodeJS.MemoryUsage;
 import CpuUsage = NodeJS.CpuUsage;
 import type { Stream } from "node:stream";
 import type { IOType } from "child_process";
+import { Readable } from "node:stream";
 
 export declare interface ModulesConfig {
     maxYoungGenerationSizeMb: number|null,
@@ -77,6 +78,9 @@ declare class ModuleSandbox<const T extends string> {
     off<T extends keyof ModuleSandboxEventTypes>(event: T, handler: (...args: any) => any): this
     
     static create<T extends string>(desc: {[KEY in T]: ModuleDescription}, config?: Partial<ModulesConfig>): ModuleSandbox<T>
+    
+    sdtout: Readable|undefined
+    sdterr: Readable|undefined
 }
 
 interface InvokeParams {
