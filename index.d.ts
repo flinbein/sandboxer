@@ -32,11 +32,11 @@ export declare interface TextModuleDescription {
     type: "text"
     source: string
 }
-export declare interface BufferModuleDescription {
-    type: "buffer"
+export declare interface BinModuleDescription {
+    type: "bin"
     source: Uint8Array
 }
-export declare type ModuleDescription = JsModuleDescription | JSONModuleDescription | TextModuleDescription | BufferModuleDescription
+export declare type ModuleDescription = JsModuleDescription | JSONModuleDescription | TextModuleDescription | BinModuleDescription
 
 interface ModuleSandboxEventTypes {
     "exit"(reason: string, value: unknown, expected: unknown): void
