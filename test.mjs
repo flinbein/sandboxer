@@ -5,7 +5,7 @@ const sandbox = await ModuleSandbox.create({
         type: "js",
         source: `
             import { x } from "./inner/module";
-            console.log("[index.js] x", x);
+            console.log("---index.js x", x);
             export function getX(){return x}
         `,
         links: ['/inner/module.js'],
@@ -15,22 +15,37 @@ const sandbox = await ModuleSandbox.create({
         type: "js",
         source: `
             import data from "../data.json" assert { type: 'json' };
-            export const x = data;
+            import text from "../data.txt" assert { type: 'text' };
+            import bin from "../data.png" assert { type: 'bin' };
+            console.log("!!!!!!!!!!!!!!!!! MODULE.JS");
+            export const x = [data, text, bin, new Date(), Infinity+10, 0/0];
         `,
-        links: ['/data.json']
+        links: ['/data.json', "/data.txt", "/data.png"]
+    },
+    "/inner/wrong.js": {
+        type: "js",
+        source: `blabla blababalblabla`,
     },
     "/data.json": {
         type: "json",
         source: `{"foo": "bar"}`
     },
+    "/data.txt": {
+        type: "text",
+        source: "hello world"
+    },
+    "/data.png": {
+        type: "bin",
+        source: Uint8Array.of(1,2,3,4,5)
+    }
 }, {
-    stdout: 1,
-    stderr: 2,
+    stdout: "pipe",
+    stderr: "pipe",
     contextHooks: ["console"]
 });
-// const crop = (s) => s.substring(0, s.length - 1);
-// sandbox.stdout.on("data", (data) => console.log("[sandbox]:", crop(data.toString())));
-// sandbox.stderr.on("data", (data) => console.error("[sandbox]:", crop(data.toString())));
+const crop = (s) => s.substring(0, s.length - 1);
+sandbox.stdout?.on("data", (data) => console.log("[sandbox]:", crop(data.toString())));
+sandbox.stderr?.on("data", (data) => console.error("[sandbox]:", crop(data.toString())));
 
 sandbox.on("data-send", (data) => {
     // console.log(">>>>>>>>>>>>>>>>>>>> SEND")

@@ -28,7 +28,15 @@ export declare interface JSONModuleDescription {
     type: "json"
     source: string
 }
-export declare type ModuleDescription = JsModuleDescription | JSONModuleDescription
+export declare interface TextModuleDescription {
+    type: "text"
+    source: string
+}
+export declare interface BufferModuleDescription {
+    type: "buffer"
+    source: Uint8Array
+}
+export declare type ModuleDescription = JsModuleDescription | JSONModuleDescription | TextModuleDescription | BufferModuleDescription
 
 interface ModuleSandboxEventTypes {
     "exit"(reason: string, value: unknown, expected: unknown): void

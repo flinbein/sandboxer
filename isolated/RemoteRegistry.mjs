@@ -143,20 +143,16 @@ export default class RemoteRegistry {
         if (context.status !== "parse") throw new Error("using encode context after prepareSend");
         if (data === undefined) return {type: "undefined"};
         if (this.#refHandler.isRef(data)) return this.#refHandler.encodeRef(context, data);
-        if (typeof data === "number"){
-            if (Number.isNaN(data)) return {type: "number", value: "NaN"};
-            if (!Number.isFinite(data)) return {type: "number", value: data > 0 ? "I" : "-I"};
-        }
         if (data == null) return data;
         if (typeof data !== "object" && typeof data !== "function") return data;
 
         const link = context.resolveLink(data);
         if (link) return link;
 
-        if (data instanceof Promise) {
+        if (Object.prototype.toString.call(data) === "[object Promise]") {
             return this.#promiseHandler.encodePromise(context, data, (...a) => this.#encode(...a));
         }
-        if (data instanceof Date){
+        if (Object.prototype.toString.call(data) === "[object Date]"){
             const time = data.getTime();
             return {type:"date", value: Number.isNaN(time) ? null : time}
         }
@@ -164,6 +160,12 @@ export default class RemoteRegistry {
             const result = {type: "array"};
             context.saveLink(data, result);
             result.value = data.map(element => this.#encode(context, element));
+            return result;
+        }
+        if (Object.prototype.toString.call(data.buffer) === '[object ArrayBuffer]') {
+            console.log("DATA-BUFFER2", data);
+            const result = {type: "value", value: data};
+            context.saveLink(data, result);
             return result;
         }
         if (typeof data === "function" || data[Symbol.iterator] || data[Symbol.asyncIterator]) {

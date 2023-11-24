@@ -42,8 +42,11 @@ async function onInitProcess(params){
 
 const moduleMap = new Map();
 let moduleDescriptions = null;
-
-function createModule(identifier, desc, context, cachedData){
+let context = {};
+function getOrCreateModule(identifier, desc, cachedData){
+    const existingModule = moduleMap.get(identifier);
+    if (existingModule) return existingModule;
+    if (!desc) throw new Error(`module not found: ${identifier}`)
     if (desc.type === "js") {
         return new vm.SourceTextModule(desc.source, {
             identifier,
@@ -52,13 +55,33 @@ function createModule(identifier, desc, context, cachedData){
     }
     if (desc.type === "json") {
         const module = new vm.SyntheticModule(["default"], () => {
+            if (typeof desc.source !== "string") throw new Error(`wrong source type: ${identifier}, expected Uint8Array`)
             const ctx = vm.createContext({json: String(desc.source)}, {codeGeneration: {strings: false}});
             module.setExport("default", vm.runInContext("JSON.parse(json)", ctx, {cachedData}));
         }, { identifier, context});
+        moduleMap.set(identifier, module);
+        return module;
+    }
+    if (desc.type === "bin") {
+        const module = new vm.SyntheticModule(["default"], () => {
+            if (!(desc.source instanceof Uint8Array)) throw new Error(`wrong source type: ${identifier}, expected Uint8Array`)
+            const ctx = vm.createContext({arrayData: [...desc.source]}, {codeGeneration: {strings: false}});
+            module.setExport("default", vm.runInContext("Uint8Array.from(arrayData)", ctx, {cachedData}));
+        }, { identifier, context});
+        moduleMap.set(identifier, module);
+        return module;
+    }
+    if (desc.type === "text") {
+        const module = new vm.SyntheticModule(["default"], () => {
+            if (typeof desc.source !== "string") throw new Error(`wrong source type: ${identifier}, expected string`)
+            module.setExport("default", desc.source);
+        }, { identifier, context});
+        moduleMap.set(identifier, module);
         return module;
     }
     throw new Error("unknown module type");
 }
+
 async function initUserModules(params){
     moduleDescriptions = params.moduleDescriptions;
     const { contextHooks } = params;
@@ -69,28 +92,18 @@ async function initUserModules(params){
         if (v === undefined) continue;
         contextObject[ctxHook] = v;
     }
-    const context = vm.createContext(contextObject, {
+    context = vm.createContext(contextObject, {
         codeGeneration: { strings: false, wasm: true}
     });
 
-    for(const identifier in moduleDescriptions) {
-        const moduleDescription = moduleDescriptions[identifier];
-
-        const module = createModule(identifier, moduleDescription, context);
-        moduleMap.set(identifier, module);
-    }
-
-    // await Promise.all([...moduleMap.values()].map(module => module.link(link)));
-
-
-    await Promise.all([...moduleMap.values()].map(module => {
-        const desc = moduleDescriptions[module.identifier];
+    await Promise.all(Object.keys(moduleDescriptions).map(async (identifier) => {
+        const desc = moduleDescriptions[identifier];
         if (desc.type === "js" && desc.evaluate) {
-            return module.link(link).then(() => {
-                return module.evaluate({
-                    timeout: typeof desc.evaluate === "number" ? desc.evaluate : undefined,
-                    breakOnSigint: true
-                });
+            const module = getOrCreateModule(identifier, desc);
+            await module.link(link);
+            await module.evaluate({
+                timeout: typeof desc.evaluate === "number" ? desc.evaluate : undefined,
+                breakOnSigint: true
             });
         }
     }));
@@ -98,21 +111,17 @@ async function initUserModules(params){
 
 function link(specifier, module, {attributes}){
     const resolvedSpecifier = resolveModulePath(specifier, module.identifier);
-    const moduleDescription = moduleDescriptions[module.identifier];
-    const links = moduleDescription.links;
+    const moduleDesc = moduleDescriptions[module.identifier];
+    const resolvedModuleDesc = moduleDescriptions[resolvedSpecifier];
+    if (!resolvedModuleDesc) throw new Error(`module not found: "${resolvedSpecifier}": lookup "${specifier}" from "${module.identifier}"`);;
+    const links = moduleDesc.links;
     if (links.includes(resolvedSpecifier)) {
-        const resolvedModule = moduleMap.get(resolvedSpecifier);
-        if (resolvedModule) {
-            if (attributes && attributes.type) {
-                const resolvedModuleDesc = moduleDescriptions[resolvedModule.identifier]
-                if (!resolvedModuleDesc) throw new Error(`module "${resolvedModule.identifier}" has unknown type`);
-                if (attributes.type !== resolvedModuleDesc.type) {
-                    throw new Error(`module type mismatch: "${resolvedSpecifier}" (${resolvedModuleDesc.type}): lookup "${specifier}" as ${attributes.type} from "${module.identifier}"`);
-                }
+        if (attributes && attributes.type) {
+            if (attributes.type !== resolvedModuleDesc.type) {
+                throw new Error(`module type mismatch: "${resolvedSpecifier}" (${resolvedModuleDesc.type}): lookup "${specifier}" as ${attributes.type} from "${module.identifier}"`);
             }
-            return resolvedModule;
         }
-        throw new Error(`module not found: "${resolvedSpecifier}": lookup "${specifier}" from "${module.identifier}"`);
+        return getOrCreateModule(resolvedSpecifier, resolvedModuleDesc);
     }
     throw new Error(`module "${module.identifier}" has no access to "${resolvedSpecifier}`);
 }
@@ -120,11 +129,11 @@ function link(specifier, module, {attributes}){
 const defaultExtensions = ["js", "mjs", "json"]
 function resolveModulePath(modulePath, importFrom) {
     const resolvedName = urlResolve(importFrom, modulePath);
-    if (moduleMap.has(resolvedName)) return resolvedName;
+    if (moduleDescriptions[resolvedName]) return resolvedName;
     if (String(resolvedName).match(/\.[^/?]$/g)) return resolvedName;
     for (let ext of defaultExtensions) {
         const tryName = resolvedName + "." + ext;
-        if (moduleMap.has(tryName)) return tryName;
+        if (moduleDescriptions[tryName]) return tryName;
     }
     return resolvedName;
 }
@@ -148,8 +157,7 @@ const remoteRegistry = new RemoteRegistry(
         processSend(["remote", data])
     },
     async (identifier, method, thisValue, args) => {
-        const module = moduleMap.get(identifier);
-        if (!module) throw new Error("Can not cal method of unknown module: "+identifier);
+        const module = getOrCreateModule(identifier, moduleDescriptions[identifier])
         if (module.status === "unlinked") {
             const linkTask = module.link(link);
             moduleTaskPromiseMap.set(module, linkTask);
