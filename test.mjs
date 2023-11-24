@@ -9,7 +9,7 @@ const sandbox = await ModuleSandbox.create({
             export function getX(){return x}
         `,
         links: ['/inner/module.js'],
-        // evaluate: true
+        evaluate: true
     },
     "/inner/module.js": {
         type: "js",
@@ -60,6 +60,8 @@ sandbox.on("exit", () => {
 })
 
 try {
+    console.log("====== START TIMEOUT");
+    await new Promise(r => setTimeout(r, 1000));
     console.log("====== START RESPONSE");
     sandbox.invoke("/index.js","getX",undefined, [], {mapping: "link", responseMapping: "link"});
     const resultRef1 = await sandbox.invoke("/index.js","getX",undefined, [], {mapping: "link", responseMapping: "link"});

@@ -48,10 +48,12 @@ function getOrCreateModule(identifier, desc, cachedData){
     if (existingModule) return existingModule;
     if (!desc) throw new Error(`module not found: ${identifier}`)
     if (desc.type === "js") {
-        return new vm.SourceTextModule(desc.source, {
+        const module = new vm.SourceTextModule(desc.source, {
             identifier,
             context,
         });
+        moduleMap.set(identifier, module);
+        return module;
     }
     if (desc.type === "json") {
         const module = new vm.SyntheticModule(["default"], () => {
@@ -96,8 +98,7 @@ async function initUserModules(params){
         codeGeneration: { strings: false, wasm: true}
     });
 
-    await Promise.all(Object.keys(moduleDescriptions).map(async (identifier) => {
-        const desc = moduleDescriptions[identifier];
+    await Promise.all(Object.entries(moduleDescriptions).map(async ([identifier, desc]) => {
         if (desc.type === "js" && desc.evaluate) {
             const module = getOrCreateModule(identifier, desc);
             await module.link(link);
@@ -126,7 +127,7 @@ function link(specifier, module, {attributes}){
     throw new Error(`module "${module.identifier}" has no access to "${resolvedSpecifier}`);
 }
 
-const defaultExtensions = ["js", "mjs", "json"]
+const defaultExtensions = ["js", "mjs", "json", "ts"]
 function resolveModulePath(modulePath, importFrom) {
     const resolvedName = urlResolve(importFrom, modulePath);
     if (moduleDescriptions[resolvedName]) return resolvedName;
